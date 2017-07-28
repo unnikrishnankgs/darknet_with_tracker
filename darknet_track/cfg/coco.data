@@ -1,0 +1,8 @@
+classes= 80
+train  = /home/pjreddie/data/coco/trainvalno5k.txt
+#valid  = coco_testdev
+valid = /home/unnikrishnan/work/darknet/data/coco_val_5k.list
+names = /home/unnikrishnan/backup/darknet_track/data/coco.names
+backup = /home/unnikrishnan/work/darknet/backup/
+eval=coco
+

@@ -1,0 +1,18 @@
+#ifndef __MULTITRACKER_H__
+#define __MULTITRACKER_H__
+ 
+#include "darknet.h"
+#include "darknet_exp.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInfo* pFTarg, tAnnInfo** appBoundingBoxesOut);
+int tracker_display_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /**< __MULTITRACKER_H__ */

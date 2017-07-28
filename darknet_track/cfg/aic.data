@@ -1,0 +1,5 @@
+classes= 15
+train  = /workspace/darknet/train.txt
+valid  = /workspace/darknet/valid.txt
+names = data/aic.names
+backup = backup

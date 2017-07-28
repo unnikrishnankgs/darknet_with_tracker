@@ -1,0 +1,678 @@
+#include "network.h"
+#include "detection_layer.h"
+#include "region_layer.h"
+#include "cost_layer.h"
+#include "utils.h"
+#include "parser.h"
+#include "box.h"
+#include "image.h"
+#include "demo.h"
+#include <sys/time.h>
+#include "darknet_exp.h"
+//#include <opencv2/opencv.hpp>
+
+#define DEMO 1
+
+/** { ISVA */
+//#define ENABLE_VIDEO_FILE_READ_AT_TAR_FPS
+#define DISPLAY_RESULS
+
+#define DEBUG
+#define VERBOSE
+#include "debug.h"
+
+/** } ISVA */
+
+
+#ifdef OPENCV
+
+typedef struct
+{
+    char **demo_names;
+    image **demo_alphabet;
+    int demo_classes;
+
+    float **probs;
+    box *boxes;
+    network net;
+    image buff [3];
+    double buff_ts [3];
+    image buff_letter[3];
+    int buff_index;
+    CvCapture * cap;
+    IplImage  * ipl;
+    float fps;
+    float demo_thresh;
+    float demo_hier;
+    int running;
+
+    int demo_delay;
+    int demo_frame;
+    int demo_detections;
+    float **predictions;
+    int demo_index;
+    int demo_done;
+    float *last_avg2;
+    float *last_avg;
+    float *avg;
+    double demo_time;
+
+
+    double nTargetFps;
+    int nCurFrameCount;
+    double nFps;
+    int nSkipFramesCnt;
+    int bProcessThisFrame;
+    tDetectorModel* pDetectorModel;
+    tAnnInfo* pBBs;
+}tDetector;
+
+static void test_detector_on_img(tDetector* pDetector, char *datacfg, char *cfgfile, char *weightfile, char *filename, float thresh, float hier_thresh, char *outfile, int fullscreen);
+
+void init_globals(tDetector* pDetector)
+{
+    pDetector->demo_names = NULL;
+    pDetector->demo_alphabet = NULL;
+    pDetector->demo_classes =  0;
+    
+    pDetector->probs = NULL;
+    pDetector->boxes = NULL;
+    pDetector->buff_ts[0] = 0;
+    pDetector->buff_ts[1] = 0;
+    pDetector->buff_ts[2] = 0;
+    pDetector->buff_index = 0;
+    pDetector->cap = 0;
+    pDetector->ipl = NULL;
+    pDetector->fps = 0;
+    pDetector->demo_thresh = 0;
+    pDetector->demo_hier = .5;
+    pDetector->running = 0;
+    
+    pDetector->demo_delay = 0;
+    pDetector->demo_frame = 3;
+    pDetector->demo_detections = 0;
+    //pDetector->predictions = NULL;
+    pDetector->demo_index = 0;
+    pDetector->demo_done = 0;
+    pDetector->last_avg2 = NULL;
+    pDetector->last_avg = NULL;
+    pDetector->avg = NULL;
+    pDetector->demo_time = 0;
+    
+    
+    pDetector->nTargetFps = 1;
+    pDetector->nCurFrameCount = 0;
+    pDetector->nFps = 0;
+    pDetector->nSkipFramesCnt = 0;
+    pDetector->bProcessThisFrame = 0;
+    pDetector->pDetectorModel = NULL;
+}
+
+double get_wall_time()
+{
+    struct timeval time;
+    if (gettimeofday(&time,NULL)){
+        return 0;
+    }
+    return (double)time.tv_sec + (double)time.tv_usec * .000001;
+}
+
+void evaluate_detections(tDetector* pDetector, image im, int num, float thresh, box *boxes, float **probs, char **names, image **alphabet, int classes)
+{
+    int i;
+    tAnnInfo annInfo = {0};
+
+    if(!pDetector || !pDetector->pDetectorModel)
+        return;
+
+    for(i = 0; i < num; ++i){
+        int class_ = max_index(probs[i], classes);
+        float prob = probs[i][class_];
+        if(prob > thresh){
+
+            int width = im.h * .006;
+
+            if(0){
+                width = pow(prob, 1./2.)*10+1;
+                alphabet = 0;
+            }
+
+            //LOGD("%d %s: %.0f%%\n", i, names[class_], prob*100);
+            LOGD("%s: %.0f%%\n", names[class_], prob*100);
+            int offset = class_*123457 % classes;
+            float red = get_color(2,offset,classes);
+            float green = get_color(1,offset,classes);
+            float blue = get_color(0,offset,classes);
+            float rgb[3];
+
+            //width = prob*20+2;
+
+            rgb[0] = red;
+            rgb[1] = green;
+            rgb[2] = blue;
+            box b = boxes[i];
+
+            int w, h;
+            w = cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_FRAME_WIDTH);
+            h = cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_FRAME_HEIGHT);
+            int left  = (b.x-b.w/2.)*w;
+            int right = (b.x+b.w/2.)*w;
+            int top   = (b.y-b.h/2.)*h;
+            int bot   = (b.y+b.h/2.)*h;
+
+            if(left < 0) left = 0;
+            if(right > im.w-1) right = im.w-1;
+            if(top < 0) top = 0;
+            if(bot > im.h-1) bot = im.h-1;
+
+#ifdef DISPLAY_RESULS
+            draw_box_width(im, left, top, right, bot, width, red, green, blue);
+            if (alphabet) {
+                image label = get_label(alphabet, names[class_], (im.h*.03)/10);
+                draw_label(im, top + width, left, label, rgb);
+                free_image(label);
+            }
+#endif
+            LOGV("box x:%f y:%f w:%f h:%f; l:%d r:%d t:%d b:%d\n", b.x, b.y, b.w, b.h, left, right, top, bot);
+            annInfo.x = (int)(left);
+            annInfo.y = (int)(top);
+            annInfo.w = (int)(right - left);
+            annInfo.h = (int)(bot - top);
+            annInfo.pcClassName = (char*)malloc(strlen(names[class_]) + 1);
+            strcpy(annInfo.pcClassName, names[class_]);
+            if(pDetector->pDetectorModel->isVideo)
+                annInfo.fCurrentFrameTimeStamp = pDetector->buff_ts[(pDetector->buff_index+2)%3];
+            else
+                annInfo.fCurrentFrameTimeStamp = pDetector->pDetectorModel->nFrameId * 1000;
+            annInfo.nVideoId = pDetector->pDetectorModel->nVideoId;
+            annInfo.prob = prob;
+            LOGD("hello..");
+            LOGV("annInfo x=%d y=%d w=%d h=%d pcClassName=%s\n",
+                annInfo.x, annInfo.y, annInfo.w, annInfo.h, annInfo.pcClassName);
+            if(pDetector->pDetectorModel && pDetector->pDetectorModel->pfnRaiseAnnCb)
+                pDetector->pDetectorModel->pfnRaiseAnnCb(annInfo);
+            /** add BB to the linked list */
+            tAnnInfo* pBB = (tAnnInfo*)calloc(1, sizeof(tAnnInfo));
+            *pBB = annInfo;
+            pBB->pNext = pDetectorModel->pBBs
+            pDetectorModel->pBBs = pBB;
+        }
+    }
+}
+
+void *detect_in_thread(void *ptr)
+{
+    tDetector* pDetector = (tDetector*)ptr;
+    LOGD("DEBUGME\n");
+    pDetector->running = 1;
+    float nms = .4;
+
+    layer l = pDetector->net.layers[pDetector->net.n-1];
+    LOGD("buff_index=%d next=%d\n", pDetector->buff_index, (pDetector->buff_index+2)%3);
+    float *X = pDetector->buff_letter[(pDetector->buff_index+2)%3].data;
+    LOGD("DEBUGME\n");
+    float *prediction = network_predict(pDetector->net, X);
+    LOGD("DEBUGME\n");
+
+    memcpy(pDetector->predictions[pDetector->demo_index], prediction, l.outputs*sizeof(float));
+    mean_arrays(pDetector->predictions, pDetector->demo_frame, l.outputs, pDetector->avg);
+    l.output = pDetector->last_avg2;
+    if(pDetector->demo_delay == 0) l.output = pDetector->avg;
+    if(l.type == DETECTION){
+        LOGD("DETECTION!\n\n\n\n");
+        get_detection_boxes(l, 1, 1, pDetector->demo_thresh, pDetector->probs, pDetector->boxes, 0);
+    } else if (l.type == REGION){
+        LOGD("REGION! buf[0].w=%d h=%d net.w=%d h=%d\n\n\n\n",
+            pDetector->buff[0].w,
+            pDetector->buff[0].h,
+            pDetector->net.w,
+            pDetector->net.h
+            );
+        get_region_boxes(l, pDetector->buff[0].w, pDetector->buff[0].h, pDetector->net.w, pDetector->net.h, pDetector->demo_thresh, pDetector->probs, pDetector->boxes, 0, 0, pDetector->demo_hier, 1);
+    } else {
+        error("Last layer must produce detections\n");
+    }
+    if (nms > 0) do_nms_obj(pDetector->boxes, pDetector->probs, l.w*l.h*l.n, l.classes, nms);
+
+    //LOGD("\033[2J");
+    //LOGD("\033[1;1H");
+    //LOGD("\nFPS:%.1f\n",pDetector->fps);
+    LOGD("Objects:\n\n");
+    image display = pDetector->buff[(pDetector->buff_index+2) % 3];
+    LOGD("Draw detections pDetector->demo_detections=%d demo_classes=%d demo_thresh=%f\n", pDetector->demo_detections, pDetector->demo_classes, pDetector->demo_thresh);
+    #ifdef DISPLAY_RESULS
+    draw_detections(display, pDetector->demo_detections, pDetector->demo_thresh, pDetector->boxes, pDetector->probs, pDetector->demo_names, pDetector->demo_alphabet, pDetector->demo_classes);
+    #endif
+    evaluate_detections(pDetector, display, pDetector->demo_detections, pDetector->demo_thresh, pDetector->boxes, pDetector->probs, pDetector->demo_names, pDetector->demo_alphabet, pDetector->demo_classes);
+    
+    pDetector->demo_index = (pDetector->demo_index + 1)%pDetector->demo_frame;
+    LOGD("demo_index=%d; demo_frame=%d\n", pDetector->demo_index, pDetector->demo_frame);
+    pDetector->running = 0;
+    return 0;
+}
+
+void *fetch_in_thread(void *ptr)
+{
+    int status;
+    tDetector* pDetector = (tDetector*)ptr;
+    LOGD("DEBUGME %p\n", pDetector);
+
+    pDetector->buff_ts[pDetector->buff_index] = cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_POS_MSEC);
+    status = fill_image_from_stream(pDetector->cap, pDetector->buff[pDetector->buff_index]);
+    letterbox_image_into(pDetector->buff[pDetector->buff_index], pDetector->net.w, pDetector->net.h, pDetector->buff_letter[pDetector->buff_index]);
+    LOGD("status = %d\n", status);
+    if(status == 0) pDetector->demo_done = 1;
+    return 0;
+}
+
+void *display_in_thread(void *ptr)
+{
+    tDetector* pDetector = (tDetector*)ptr;
+    LOGD("DEBUGME %p\n", pDetector);
+    show_image_cv(pDetector->buff[(pDetector->buff_index + 1)%3], "Demo", pDetector->ipl);
+    int c = cvWaitKey(1);
+    if (c != -1) c = c%256;
+    if (c == 10){
+        if(pDetector->demo_delay == 0) pDetector->demo_delay = 60;
+        else if(pDetector->demo_delay == 5) pDetector->demo_delay = 0;
+        else if(pDetector->demo_delay == 60) pDetector->demo_delay = 5;
+        else pDetector->demo_delay = 0;
+    } else if (c == 27) {
+        pDetector->demo_done = 1;
+        return 0;
+    } else if (c == 82) {
+        pDetector->demo_thresh += .02;
+    } else if (c == 84) {
+        pDetector->demo_thresh -= .02;
+        if(pDetector->demo_thresh <= .02) pDetector->demo_thresh = .02;
+    } else if (c == 83) {
+        pDetector->demo_hier += .02;
+    } else if (c == 81) {
+        pDetector->demo_hier -= .02;
+        if(pDetector->demo_hier <= .0) pDetector->demo_hier = .0;
+    }
+    return 0;
+}
+
+void *display_loop(void *ptr)
+{
+    tDetector* pDetector = (tDetector*)ptr;
+    while(1){
+        display_in_thread(pDetector);
+    }
+}
+
+void *detect_loop(void *ptr)
+{
+    while(1){
+        detect_in_thread(0);
+    }
+}
+
+int initOnce =0;
+
+void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int cam_index, const char *filename, char **names, int classes, int delay, char *prefix, int avg_frames, float hier, int w, int h, int frames, int fullscreen)
+{
+    tDetector* pDetector = (tDetector*)apDetector;
+    LOGD("DEBUGME\n");
+
+    pDetector->demo_delay = delay;
+    pDetector->demo_frame = avg_frames;
+    image **alphabet = NULL;
+#ifdef DISPLAY_RESULS
+    alphabet = load_alphabet();
+#endif
+    pDetector->demo_names = names;
+    pDetector->demo_alphabet = alphabet;
+    pDetector->demo_classes = classes;
+    pDetector->demo_thresh = thresh;
+    pDetector->demo_hier = hier;
+    LOGD("Demo\n");
+    LOGD("classes=%d delay=%d avg_frames=%d hier=%f w=%d h=%d frames=%d fullscreen=%d\n", classes, delay, avg_frames, hier, w, h, frames, fullscreen);
+    if(!initOnce)
+    {
+    pDetector->predictions = (float**)calloc(pDetector->demo_frame, sizeof(float*));
+    pDetector->net = parse_network_cfg(cfgfile);
+    if(weightfile){
+        load_weights(&pDetector->net, weightfile);
+    }
+    set_batch_network(&pDetector->net, 1);
+    initOnce = 1;
+    }
+    pthread_t detect_thread;
+    pthread_t fetch_thread;
+
+    srand(2222222);
+
+
+    if(filename){
+        LOGD("video file: %s\n", filename);
+        pDetector->cap = cvCaptureFromFile(filename);
+        LOGD("DEBUGME %p\n", pDetector->cap);
+    }else{
+        pDetector->cap = cvCaptureFromCAM(cam_index);
+
+        if(w){
+            cvSetCaptureProperty(pDetector->cap, CV_CAP_PROP_FRAME_WIDTH, w);
+        }
+        if(h){
+            cvSetCaptureProperty(pDetector->cap, CV_CAP_PROP_FRAME_HEIGHT, h);
+        }
+        if(frames){
+            cvSetCaptureProperty(pDetector->cap, CV_CAP_PROP_FPS, frames);
+        }
+    }
+
+    if(!pDetector->cap)
+    {
+        //error("Couldn't connect to webcam.\n");
+        LOGE("ERROR; file could not be read / dev could not be opened\n");
+        return;
+    }
+
+    layer l = pDetector->net.layers[pDetector->net.n-1];
+    pDetector->demo_detections = l.n*l.w*l.h;
+    int j;
+
+    LOGD("DEBUGME\n");
+    pDetector->avg = (float *) calloc(l.outputs, sizeof(float));
+    pDetector->last_avg  = (float *) calloc(l.outputs, sizeof(float));
+    pDetector->last_avg2 = (float *) calloc(l.outputs, sizeof(float));
+    for(j = 0; j < pDetector->demo_frame; ++j) pDetector->predictions[j] = (float *) calloc(l.outputs, sizeof(float));
+
+    pDetector->boxes = (box *)calloc(l.w*l.h*l.n, sizeof(box));
+    pDetector->probs = (float **)calloc(l.w*l.h*l.n, sizeof(float *));
+    for(j = 0; j < l.w*l.h*l.n; ++j) pDetector->probs[j] = (float *)calloc(l.classes+1, sizeof(float));
+
+    pDetector->buff_ts[0] = cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_POS_MSEC);
+    pDetector->buff[0] = get_image_from_stream(pDetector->cap);
+    pDetector->buff[1] = copy_image(pDetector->buff[0]);
+    pDetector->buff[2] = copy_image(pDetector->buff[0]);
+    pDetector->buff_letter[0] = letterbox_image(pDetector->buff[0], pDetector->net.w, pDetector->net.h);
+    pDetector->buff_letter[1] = letterbox_image(pDetector->buff[0], pDetector->net.w, pDetector->net.h);
+    pDetector->buff_letter[2] = letterbox_image(pDetector->buff[0], pDetector->net.w, pDetector->net.h);
+    pDetector->ipl = cvCreateImage(cvSize(pDetector->buff[0].w,pDetector->buff[0].h), IPL_DEPTH_8U, pDetector->buff[0].c);
+
+    LOGD("DEBUGME\n");
+    int count = 0;
+    #ifdef DISPLAY_RESULS
+    if(!prefix){
+        cvNamedWindow("Demo", CV_WINDOW_NORMAL); 
+        if(fullscreen){
+            cvSetWindowProperty("Demo", CV_WND_PROP_FULLSCREEN, CV_WINDOW_FULLSCREEN);
+        } else {
+            cvMoveWindow("Demo", 0, 0);
+            cvResizeWindow("Demo", 1352, 1013);
+        }
+    }
+    #endif
+
+    pDetector->demo_time = get_wall_time();
+
+    pDetector->nFps = (int)cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_FPS);
+    
+    pDetector->nSkipFramesCnt = (int)(pDetector->nFps / pDetector->nTargetFps);
+
+    //cvSetCaptureProperty(pDetector->cap, CV_CAP_PROP_FPS, (double)pDetector->nTargetFps);
+
+    LOGD("DEBUGME %d\n", pDetector->demo_done);
+    while(!pDetector->demo_done){
+        LOGD("pDetector->demo_done=%d count=%d prefix=%s pDetector->nSkipFramesCnt=%d\n", pDetector->demo_done, count, prefix, pDetector->nSkipFramesCnt);
+        LOGD("cap prop; w=%f h=%f frame_count=%f FPS=%f POS_MS=%f pos_count=%f\n", 
+                cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_FRAME_WIDTH),
+                cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_FRAME_HEIGHT),
+                cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_FRAME_COUNT),
+                cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_FPS),
+                cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_POS_MSEC),
+                cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_POS_FRAMES));
+#ifdef ENABLE_VIDEO_FILE_READ_AT_TAR_FPS
+        pDetector->bProcessThisFrame = (pDetector->nCurFrameCount && !(pDetector->nCurFrameCount % pDetector->nSkipFramesCnt));
+        if(pDetector->bProcessThisFrame)
+#else
+        if(1)
+#endif /**< ENABLE_VIDEO_FILE_READ_AT_TAR_FPS */
+        {
+            pDetector->buff_index = (pDetector->buff_index + 1) %3;
+            LOGV("buff_index=%d\n", pDetector->buff_index);
+            if(pthread_create(&fetch_thread, 0, fetch_in_thread, pDetector)) error("Thread creation failed");
+            if(pthread_create(&detect_thread, 0, detect_in_thread, pDetector)) error("Thread creation failed");
+            if(!prefix){
+                if(count % (pDetector->demo_delay+1) == 0){
+                    pDetector->fps = 1./(get_wall_time() - pDetector->demo_time);
+                    pDetector->demo_time = get_wall_time();
+                    float *swap = pDetector->last_avg;
+                    pDetector->last_avg  = pDetector->last_avg2;
+                    pDetector->last_avg2 = swap;
+                    memcpy(pDetector->last_avg, pDetector->avg, l.outputs*sizeof(float));
+                }
+                #ifdef DISPLAY_RESULS
+                display_in_thread(pDetector);
+                #endif /**< DISPLAY_RESULS*/
+            }else{
+                char name[256];
+                //LOGD(name, "%s_%08d", prefix, count);
+                save_image(pDetector->buff[(pDetector->buff_index + 1)%3], name);
+            }
+            pthread_join(fetch_thread, 0);
+            pthread_join(detect_thread, 0);
+            ++count;
+            /** done detecting one frame */
+        }
+        else
+        {
+            cvGrabFrame(pDetector->cap);
+        }
+        LOGD("DEBUGME\n");
+        pDetector->nCurFrameCount++;
+    }
+    LOGD("DEBUGME\n");
+    //cvReleaseCapture(pDetector->cap);
+    free_image(pDetector->buff[0]);
+    free_image(pDetector->buff[1]);
+    free_image(pDetector->buff[2]);
+    LOGD("DEBUGME\n");
+    pDetector->cap = NULL;
+}
+
+void demo(char *cfgfile, char *weightfile, float thresh, int cam_index, const char *filename, char **names, int classes, int delay, char *prefix, int avg_frames, float hier, int w, int h, int frames, int fullscreen)
+{
+    tDetectorModel* pDetectorModel = calloc(1, sizeof(tDetectorModel));
+    pDetectorModel->pcCfg = cfgfile;
+    pDetectorModel->pcWeights = weightfile;
+    pDetectorModel->pcFileName = (char*)filename;
+    pDetectorModel->pcNames = (char*)names;
+    pDetectorModel->isVideo = 1; //true by default
+    //return demo2(pDetector, cfgfile, weightfile, thresh, cam_index, filename, names, classes, delay, prefix, avg_frames, hier, w, h, frames, fullscreen);
+    run_detector_model(pDetectorModel);
+}
+#else
+void demo(char *cfgfile, char *weightfile, float thresh, int cam_index, const char *filename, char **names, int classes, int delay, char *prefix, int avg, float hier, int w, int h, int frames, int fullscreen)
+{
+    fLOGD(stderr, "Demo needs OpenCV for webcam images.\n");
+}
+#endif
+
+int run_detector_model(tDetectorModel* apDetectorModel)
+{
+    tDetector* pDetector = calloc(1, sizeof(tDetector));
+    init_globals(pDetector);
+#if 0
+    char *prefix = find_char_arg(argc, argv, "-prefix", 0);
+    float thresh = find_float_arg(argc, argv, "-thresh", .24);
+    float hier_thresh = find_float_arg(argc, argv, "-hier", .5);
+    int cam_index = find_int_arg(argc, argv, "-c", 0);
+    int frame_skip = find_int_arg(argc, argv, "-s", 0);
+    int avg = find_int_arg(argc, argv, "-avg", 3);
+    if(argc < 4){
+        fLOGD(stderr, "usage: %s %s [train/test/valid] [cfg] [weights (optional)]\n", argv[0], argv[1]);
+        return;
+    }
+    char *gpu_list = find_char_arg(argc, argv, "-gpus", 0);
+    char *outfile = find_char_arg(argc, argv, "-out", 0);
+    int *gpus = 0;
+    int gpu = 0;
+    int ngpus = 0;
+    if(gpu_list){
+        LOGD("%s\n", gpu_list);
+        int len = strlen(gpu_list);
+        ngpus = 1;
+        int i;
+        for(i = 0; i < len; ++i){
+            if (gpu_list[i] == ',') ++ngpus;
+        }
+        gpus = calloc(ngpus, sizeof(int));
+        for(i = 0; i < ngpus; ++i){
+            gpus[i] = atoi(gpu_list);
+            gpu_list = strchr(gpu_list, ',')+1;
+        }
+    } else {
+        gpu = gpu_index;
+        gpus = &gpu;
+        ngpus = 1;
+    }
+
+    int clear = find_arg(argc, argv, "-clear");
+    int fullscreen = find_arg(argc, argv, "-fullscreen");
+    int width = find_int_arg(argc, argv, "-w", 0);
+    int height = find_int_arg(argc, argv, "-h", 0);
+    int fps = find_int_arg(argc, argv, "-fps", 0);
+
+    char *datacfg = argv[3];
+    char *cfg = argv[4];
+    char *weights = (argc > 5) ? argv[5] : 0;
+    char *filename = (argc > 6) ? argv[6]: 0;
+    if(0==strcmp(argv[2], "test")) test_detector(datacfg, cfg, weights, filename, thresh, hier_thresh, outfile, fullscreen);
+    else if(0==strcmp(argv[2], "train")) train_detector(datacfg, cfg, weights, gpus, ngpus, clear);
+    else if(0==strcmp(argv[2], "valid")) validate_detector(datacfg, cfg, weights, outfile);
+    else if(0==strcmp(argv[2], "valid2")) validate_detector_flip(datacfg, cfg, weights, outfile);
+    else if(0==strcmp(argv[2], "recall")) validate_detector_recall(cfg, weights);
+    else if(0==strcmp(argv[2], "demo")) {
+        list *options = read_data_cfg(datacfg);
+        int classes = option_find_int(options, "classes", 20);
+        char *name_list = option_find_str(options, "names", "data/names.list");
+        char **names = get_labels(name_list);
+        demo(cfg, weights, thresh, cam_index, filename, names, classes, frame_skip, prefix, avg, hier_thresh, width, height, fps, fullscreen);
+    }
+#endif
+    {
+        pDetector->pDetectorModel = apDetectorModel;
+        LOGD("isVideo=%d\n", apDetectorModel->isVideo);
+        if(1)//apDetectorModel->isVideo)
+        {
+            LOGD("in %p\n", apDetectorModel);
+            LOGD("demo start %s\n", apDetectorModel->pcDataCfg);
+            list *options = read_data_cfg(apDetectorModel->pcDataCfg ? apDetectorModel->pcDataCfg : "cfg/aic.data");
+            LOGD("h1\n");
+            char *name_list = option_find_str(options, "names", apDetectorModel->pcNames ? apDetectorModel->pcNames : "data/names.list");
+            LOGD("name_list=%s\n", name_list);
+            char **names = get_labels(name_list);
+            LOGD("h1\n");
+            int classes = option_find_int(options, "classes", 20);
+            LOGD("h1\n");
+            LOGD("Detector Model cb is %p\n", pDetector->pDetectorModel->pfnRaiseAnnCb);
+            demo2(pDetector, apDetectorModel->pcCfg, apDetectorModel->pcWeights, 0.24/**< apDetectorModel->fThresh */, 
+                0/**< cam_index */, apDetectorModel->pcFileName, names, classes, 0 /**< frame_skip */, 
+                NULL, 1, pDetector->demo_hier, 0 /**< w */, 0 /**< h */, 0 /**< 0 */, 0 /**< fullscreen */
+                );
+        }
+        else
+        {
+            test_detector_on_img(pDetector, apDetectorModel->pcDataCfg, apDetectorModel->pcCfg, apDetectorModel->pcWeights, apDetectorModel->pcFileName, apDetectorModel->fThresh, pDetector->demo_hier, NULL, 0);
+        }
+
+       
+    }
+
+    return 0;
+}
+
+static void test_detector_on_img(tDetector* pDetector, char *datacfg, char *cfgfile, char *weightfile, char *filename, float thresh, float hier_thresh, char *outfile, int fullscreen)
+{
+    LOGD("DEBUGME\n");
+    list *options = read_data_cfg(datacfg);
+    LOGD("DEBUGME\n");
+    char *name_list = option_find_str(options, "names", "data/names.list");
+    LOGD("DEBUGME\n");
+    char **names = get_labels(name_list);
+    LOGD("DEBUGME\n");
+
+    image **alphabet = NULL;
+#ifdef DISPLAY_RESULS
+    alphabet = load_alphabet();
+#endif
+    LOGD("DEBUGME\n");
+    network net = parse_network_cfg(cfgfile);
+    LOGD("DEBUGME\n");
+    if(weightfile){
+        load_weights(&net, weightfile);
+    }
+    set_batch_network(&net, 1);
+    srand(2222222);
+    clock_t time;
+    char buff[2560];
+    char *input = buff;
+    int j;
+    float nms=.4;
+    LOGD("DEBUGME\n");
+    while(1){
+    LOGD("DEBUGME [%s]\n", filename);
+        if(filename){
+            strncpy(input, filename, 2560);
+            LOGD("input [%s]\n", input);
+        } else {
+            printf("Enter Image Path: ");
+            fflush(stdout);
+            input = fgets(input, 256, stdin);
+            if(!input) return;
+            strtok(input, "\n");
+        }
+        LOGD("DEBUGME\n");
+        image im = load_image_color(input,0,0);
+        LOGD("DEBUGME im.data=%p\n", im.data);
+        image sized = letterbox_image(im, net.w, net.h);
+        LOGD("DEBUGME\n");
+        //image sized = resize_image(im, net.w, net.h);
+        //image sized2 = resize_max(im, net.w);
+        //image sized = crop_image(sized2, -((net.w - sized2.w)/2), -((net.h - sized2.h)/2), net.w, net.h);
+        //resize_network(&net, sized.w, sized.h);
+        layer l = net.layers[net.n-1];
+
+        box *boxes = (box*)calloc(l.w*l.h*l.n, sizeof(box));
+        float **probs = (float**)calloc(l.w*l.h*l.n, sizeof(float *));
+        for(j = 0; j < l.w*l.h*l.n; ++j) probs[j] = (float*)calloc(l.classes + 1, sizeof(float *));
+
+        float *X = sized.data;
+        time=clock();
+        network_predict(net, X);
+        printf("%s: Predicted in %f seconds.\n", input, sec(clock()-time));
+        get_region_boxes(l, im.w, im.h, net.w, net.h, thresh, probs, boxes, 0, 0, hier_thresh, 1);
+        if (nms) do_nms_obj(boxes, probs, l.w*l.h*l.n, l.classes, nms);
+        //else if (nms) do_nms_sort(boxes, probs, l.w*l.h*l.n, l.classes, nms);
+        evaluate_detections(pDetector, im, l.w*l.h*l.n, thresh, boxes, probs, names, alphabet, l.classes);
+#ifdef DISPLAY_RESULS
+        draw_detections(im, l.w*l.h*l.n, thresh, boxes, probs, names, alphabet, l.classes);
+        if(outfile){
+            save_image(im, outfile);
+        }
+        else{
+            save_image(im, "predictions");
+#ifdef OPENCV
+            cvNamedWindow("predictions", CV_WINDOW_NORMAL); 
+            if(fullscreen){
+                cvSetWindowProperty("predictions", CV_WND_PROP_FULLSCREEN, CV_WINDOW_FULLSCREEN);
+            }
+            show_image(im, "predictions");
+            cvWaitKey(0);
+            cvDestroyAllWindows();
+#endif
+        }
+#endif
+
+        free_image(im);
+        free_image(sized);
+        free(boxes);
+        free_ptrs((void **)probs, l.w*l.h*l.n);
+        if (filename) break;
+    }
+}
+
