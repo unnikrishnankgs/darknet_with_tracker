@@ -11,8 +11,8 @@
 #include "stb_image_write.h"
 //#include <opencv2/opencv.hpp>
 
-#define DEBUG
-#define VERBOSE
+//#define DEBUG
+//#define VERBOSE
 #include "debug.h"
 
 int windows = 0;
@@ -212,7 +212,7 @@ void draw_detections(image im, int num, float thresh, box *boxes, float **probs,
             }
 
             //printf("%d %s: %.0f%%\n", i, names[class1], prob*100);
-            printf("class=%d %s: %.0f%%\n", class1, names[class1], prob*100);
+            LOGD("class=%d %s: %.0f%%\n", class1, names[class1], prob*100);
             int offset = class1*123457 % classes;
             float red = get_color(2,offset,classes);
             float green = get_color(1,offset,classes);
@@ -232,10 +232,11 @@ void draw_detections(image im, int num, float thresh, box *boxes, float **probs,
             int bot   = (b.y+b.h/2.)*im.h;
 
             if(left < 0) left = 0;
-            if(right > im.w-1) right = im.w-1;
+            if(right > im.w-1) right = im.w-2;
             if(top < 0) top = 0;
-            if(bot > im.h-1) bot = im.h-1;
+            if(bot > im.h-1) bot = im.h-2;
 
+            width = 1;
             draw_box_width(im, left, top, right, bot, width, red, green, blue);
             if (alphabet) {
                 image label = get_label(alphabet, names[class1], (im.h*.03)/10);
