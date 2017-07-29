@@ -39,7 +39,7 @@
 #define GREEN   "\033[32m"      /* Green */
 
 //#define USE_MULTI_TRACKER
-//#define DISPLAY_RESULTS
+#define DISPLAY_RESULTS
 #define MAX_TRACK_ITERATIONS 1
 
 #define TRACKING_ALGO "MEDIAN_FLOW"
@@ -338,6 +338,10 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
                     LOGD("found\n");
                     #ifdef DISPLAY_RESULTS
                     rectangle(imgTargM, object, Scalar( 255, 0, 0 ), 2, 1 );
+                    char disp[50] = {0};
+                    LOGV("disp: [%d(%d, %d):%s]", pBB->nBBId, pBB->x, pBB->y, pBB->pcClassName);
+                    snprintf(disp, 50-1, "[%d(%d, %d):%s]", pBB->nBBId, pBB->x, pBB->y, pBB->pcClassName);
+                    putText(imgTargM, disp, Point(object.x,object.y), FONT_HERSHEY_PLAIN, 1, Scalar(255,255,255));
                     #endif
                     pBBTmp = (tAnnInfo*)malloc(sizeof(tAnnInfo));
                     memcpy(pBBTmp, pBB, sizeof(tAnnInfo));

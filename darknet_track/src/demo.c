@@ -16,7 +16,7 @@
 
 /** { ISVA */
 //#define ENABLE_VIDEO_FILE_READ_AT_TAR_FPS
-//#define DISPLAY_RESULS
+#define DISPLAY_RESULS
 
 /** shall track BBs in the same frame */
 //#define TEST_TRACKING
@@ -30,6 +30,7 @@
  * NOTE: works only when the input is a video or live camera feed
  */
 #define IMPURE_CNN
+#define GOOD_IOU_THRESHOLD (0.5)
 
 #define DEBUG
 #define VERBOSE
@@ -41,6 +42,8 @@
 #ifdef OPENCV
 
 #define MAX_FRAMES_TO_HASH 15
+
+#define ABS_DIFF(a, b) ((a) > (b)) ? ((a)-(b)) : ((b)-(a))
 
 typedef struct Frame tFrame;
 typedef struct
@@ -71,7 +74,7 @@ typedef struct
     int bProcessThisFrame;
     tDetectorModel* pDetectorModel;
     tFrame* pFrames;
-    tFrame* pFramesHash[MAX_FRAMES_TO_HASH];
+    tFrame* pFramesHash[MAX_FRAMES_TO_HASH+1]; /**< we do 0-14 and 14-30 if MAX_FRAMES_TO_HASH=30, so a +1 */
     int nBBCount;
     double countFrame;
     double totalFramesInVid;
@@ -632,7 +635,9 @@ int interpolate_bbs_btw_frames(tDetector* pDetector, tFrame** ppFramesHashBase, 
 void detect_object_for_frame(tDetector* pDetector, tFrame* pFrame, int count)
 {
     pthread_t detect_thread;
+#if 0
     pthread_t fetch_thread;
+#endif
 
     if(!pDetector || !pFrame)
         return;
@@ -667,10 +672,109 @@ void detect_object_for_frame(tDetector* pDetector, tFrame* pFrame, int count)
 
 }
 
-#if 0
-            assess_iou_BBstracked_BBs_detected(pDetector, pOutBBs,
-                pDetector->pFramesHash[MAX_FRAMES_TO_HASH-1]->pBBs
-                );
+double find_iou(tAnnInfo* pBB1, tAnnInfo* pBB2)
+{
+    /* The intersection: (w, h) 
+     * = ( ((w1 + w2) - (max(x1+w,x2+w) - min(x1,x2))), 
+     *          ((h1 + h2) - (max(y1,y2) - min(y1,y2))) )
+     * union area = a1 + a1 - a_intersection
+     * */ 
+    double nAInter, nA1, nA2, nAUnion, wI, hI;
+    double iou = 0.0;
+    nA1 = (double)(pBB1->w * pBB1->h);
+    nA2 = (double)(pBB2->w * pBB2->h);
+
+    wI = (double)((pBB1->w + pBB2->w) - (MAX(pBB1->x + pBB1->w, pBB2->x + pBB2->w) - MIN(pBB1->x, pBB2->x)));
+    hI = (double)((pBB1->h + pBB2->h) - (MAX(pBB1->y + pBB1->h, pBB2->y + pBB2->h) - MIN(pBB1->y, pBB2->y)));
+    nAInter = wI * hI;
+
+    nAUnion = nA1 + nA2 - nAInter;
+
+    iou = nAInter / nAUnion;
+
+    if(iou >= 0.0 && iou <= 1.0)
+        return iou;
+
+    return 0.0;
+}
+
+tAnnInfo* return_BB_with_best_iou(tAnnInfo* pBB1, tAnnInfo* pBB2)
+{
+    if(!pBB1 || !pBB2)
+        return NULL;
+
+    /** best IoU is 1.0 */
+    double bb1_distance_from_best_iou = ABS_DIFF(1.0, pBB1->fIoU);
+    double bb2_distance_from_best_iou = ABS_DIFF(1.0, pBB2->fIoU);
+
+    if(bb1_distance_from_best_iou < bb2_distance_from_best_iou)
+        return pBB1;
+    return pBB2;
+}
+
+#if 1
+void assess_iou_trackedBBs_detectedBBs(tDetector* pDetector, tAnnInfo* pTrackedBBs,
+                tAnnInfo* pDetectedBBs)
+{
+    tAnnInfo* pBBT;
+    tAnnInfo* pBBD;
+    tAnnInfo* pBBDWithMaxIoU;
+    if(!pDetector || !pTrackedBBs || !pDetectedBBs)
+        return;
+
+    pBBT = pTrackedBBs;
+    pBBD = pDetectedBBs;
+
+    while(pBBD)
+    {
+        pBBD->fIoU = 0;
+        pBBD->bIoUAssigned = 0;
+        pBBD = pBBD->pNext;
+    }
+
+    /** for all tracked BBs, find the corresponding BB in the detection result by
+     * matching the IoU between tracked BBs and detected BBs 
+     */
+
+    /** find matches for objects in pTrackedBBs in pDetectedBBs */
+    
+    pBBT = pTrackedBBs;
+    while(pBBT)
+    {
+        LOGV("finding match for [%s] (%d, %d)\n", pBBT->pcClassName, pBBT->x, pBBT->y);
+        pDetectedBBs->fIoU = 0.0;
+        pBBD = pBBDWithMaxIoU = pDetectedBBs;
+        while(pBBD)
+        {
+            if(pBBD->bIoUAssigned)
+            {
+                LOGV("IoU already assigned\n");
+                //continue;
+            }
+            /** check & accept max IoU if the classnames match */
+            pBBD->fIoU = find_iou(pBBT, pBBD);
+            LOGV("IoU=%f; currentMax=%f [%s] (%d, %d):(%d,%d)\n", pBBD->fIoU, pBBDWithMaxIoU->fIoU, pBBD->pcClassName, pBBD->x, pBBD->y, pBBT->x, pBBT->y);
+            if(return_BB_with_best_iou(pBBDWithMaxIoU, pBBD) == pBBD
+                && (strcmp(pBBT->pcClassName, pBBD->pcClassName) == 0))
+            {
+                if(pBBD->fIoU > GOOD_IOU_THRESHOLD)
+                {
+                    LOGV("max IoU changed\n");
+                    pBBDWithMaxIoU = pBBD;
+                    /** this is the tracked BB in pDetectedBBs,
+                     * so copy the BBID into pDetectedBB candidate */
+                    pBBDWithMaxIoU->nBBId = pBBT->nBBId;
+                    pBBDWithMaxIoU->bIoUAssigned = 1;
+                    LOGV("changed detected BBID to %d\n", pBBDWithMaxIoU->nBBId);
+                }
+            }
+            pBBD = pBBD->pNext;
+        }
+        pBBT = pBBT->pNext;
+    }
+
+    return;
+}
 #endif
 
 void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int cam_index, const char *filename, char **names, int classes, int delay, char *prefix, int avg_frames, float hier, int w, int h, int frames, int fullscreen)
@@ -812,25 +916,41 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
              *  6. mess_cleanup
              */
             
-            int nL = MAX_FRAMES_TO_HASH;
-            #if 1
-            pDetector->pFramesHash[0] = get_frame_from_cap(pDetector, NULL, pDetector->countFrame, 0, 0);
-            #if 1
-            pDetector->countFrame++;
-            if(!pDetector->pFramesHash[0])
+            int nL, nFIdxToReadInto = 0; /**< nL is the count of total frames available in the hash for this go! */
+            LOGV("second? %p\n", pDetector->pFramesHash[0]);
+            if(pDetector->pFramesHash[0])
             {
-                LOGV("could not read very first img in hash gap; break!\n");
-                break;
+                nFIdxToReadInto = 1;
+                nL = MAX_FRAMES_TO_HASH+1; /**< hash in  */
             }
-            for(int i = 1; i < MAX_FRAMES_TO_HASH; i++)
+            else
             {
-                tFrame* pFramePrev = i > 1 ? pDetector->pFramesHash[i] : NULL;
+                nL = MAX_FRAMES_TO_HASH;
+            }
+            for(int i = nFIdxToReadInto; i < nL; i++)
+            {
+                /** except for nFIdxToReadInto and nL-1, all frames are read only
+                 * to do a smooth seek to the (nL-1)th frame */
+                tFrame* pFramePrev = (i > (nFIdxToReadInto+1)) ? pDetector->pFramesHash[i-1] : NULL; /**< frame to flush until nL */
                 pDetector->pFramesHash[i] = get_frame_from_cap(pDetector, NULL, pDetector->countFrame, 0, 0);
                 if(!pDetector->pFramesHash[i])
                 {
+                    if(i == nFIdxToReadInto)
+                    {
+                        LOGV("could not read very first img in hash gap; done reading the stream\n");
+                        /** cleanup any saved hash */
+                        if(pDetector->pFramesHash[0])
+                            free_frame(pDetector, pDetector->pFramesHash[0]);
+                        return;
+                    }
                     nL = i - 1;
                     LOGV("prob with read\n");
                     break;
+                }
+                if(i == 0)
+                {
+                    LOGV("do the one time detect\n");
+                    detect_object_for_frame(pDetector, pDetector->pFramesHash[0], count);
                 }
                 pDetector->countFrame++;
                 /** delete prev frame; we dont need it; this exercise is alt to seek */
@@ -841,47 +961,28 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                 }
             }
             
-            #else   
-            for(int i = 1; i < nL-1; i++)
-            {
-                pDetector->pFramesHash[i] = calloc(1, sizeof(tFrame));
-            }
-            pDetector->pFramesHash[nL-1] = get_frame_from_cap(pDetector, NULL, (pDetector->countFrame + (nL-1)), 1, 0);
-            pDetector->countFrame += (nL);
-            #endif
-            #endif
-
-            detect_object_for_frame(pDetector, pDetector->pFramesHash[0], count);
             /** use the BBs at pDetector->pFramesHash[0]->pBBs and fetch the tracked replicas of them in
              * pDetector->pFramesHash[MAX_FRAMES_TO_HASH-1] */
-            #if 1
-            tAnnInfo* pOutBBs = NULL;
             if(pDetector->pFramesHash[0] && pDetector->pFramesHash[nL-1])
             {
+                tAnnInfo* pOutBBs = NULL;
                 track_bb_in_frame(pDetector->pFramesHash[0]->pBBs, 
                     &pDetector->pFramesHash[0]->frameInfoWithCpy, 
                     &pDetector->pFramesHash[nL-1]->frameInfoWithCpy,
                     &pOutBBs
                     );
-                 pDetector->pFramesHash[nL-1]->pBBs = pOutBBs;
-#if 0
-                detect_object_for_frame(pDetector, pDetector->pFramesHash[nL-1], count);
-                /** now do a IoU assessment btw the 2 BBs and come up with the list of BBs */
-                assess_iou_BBstracked_BBs_detected(pDetector, pOutBBs,
-                    pDetector->pFramesHash[nL-1]->pBBs
-                    );
-#endif
-                LOGV("BBs tracked=%p\n", pDetector->pFramesHash[nL-1]->pBBs);
-                #else
-                detect_object_for_frame(pDetector, pDetector->pFramesHash[nL-1], count);
-                #endif
-    
+                pDetector->pFramesHash[nL-1]->pBBs = pOutBBs;
                 /** interpolate all the BBs for frames in between 0 and (nL-1) */
                 interpolate_bbs_btw_frames(pDetector, pDetector->pFramesHash, 0, nL-1);
-                #if 0
-                tracker_display_frame(pDetector->pFramesHash[nL/2]->pBBs, 
-                    &pDetector->pFramesHash[nL/2]->frameInfoWithCpy);
-                #endif
+                pDetector->pFramesHash[nL-1]->pBBs = NULL;
+                detect_object_for_frame(pDetector, pDetector->pFramesHash[nL-1], count);
+                /** now do a IoU assessment btw the 2 BBs and come up with the list of BBs */
+                assess_iou_trackedBBs_detectedBBs(pDetector, pOutBBs,
+                    pDetector->pFramesHash[nL-1]->pBBs
+                    );
+                free_BBs(pOutBBs);
+                LOGV("BBs tracked=%p\n", pDetector->pFramesHash[nL-1]->pBBs);
+    
             
             }
             else
@@ -889,12 +990,19 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                 LOGV("NOT RIGHT\n");
             }
             #if 1
-            for(int i = 0; i < MAX_FRAMES_TO_HASH; i++)
+            for(int i = nFIdxToReadInto; i < nL; i++)
             {
                 if(pDetector->pFramesHash[i])
                 {
                     LOGV("firing CB for frame %d BBs=%p\n", i, pDetector->pFramesHash[i]->pBBs);
                     fire_bb_callbacks_for_frame(pDetector, pDetector->pFramesHash[i]);
+                    if((i == (nL-1)) && !pDetector->demo_done)
+                    {
+                        LOGV("save the %dth hash in 0th for next iteration %p %p\n", i, pDetector->pFramesHash[i], pDetector->pFramesHash[i]->pBBs);
+                        pDetector->pFramesHash[0] = pDetector->pFramesHash[i];
+                        pDetector->pFramesHash[i] = NULL;
+                        break;
+                    }
                     free_frame(pDetector, pDetector->pFramesHash[i]);
                     pDetector->pFramesHash[i] = NULL;
                 }
@@ -911,6 +1019,8 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
         LOGD("DEBUGME\n");
         pDetector->nCurFrameCount++;
     }
+
+    
     LOGD("DEBUGME\n");
     //cvReleaseCapture(pDetector->cap);
     LOGD("DEBUGME\n");
