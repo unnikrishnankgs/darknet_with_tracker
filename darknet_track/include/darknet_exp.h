@@ -15,7 +15,7 @@ struct AnnInfo
      double prob;
      int nBBId;
      double fIoU; /**< used for processing IoU in darknet framework */
-     char bIoUAssigned;
+     char bBBIDAssigned;
      tAnnInfo* pNext;
 };
 

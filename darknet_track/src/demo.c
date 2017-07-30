@@ -33,7 +33,7 @@
 #define GOOD_IOU_THRESHOLD (0.5)
 
 //#define DEBUG
-//#define VERBOSE
+#define VERBOSE
 #include "debug.h"
 
 /** } ISVA */
@@ -55,6 +55,9 @@ typedef struct
     network net;
     CvCapture * cap;
     float fps;
+    double fFps;
+    double fStartTime;
+    double fEndTime;
     float demo_thresh;
     float demo_hier;
     int running;
@@ -319,8 +322,11 @@ tFrame* get_frame_from_cap(tDetector* pDetector, tFrame* apReuseFrame, double se
                 if(!cvGrabFrame(pDetector->cap))
                 {
                    status = 0;
+                   #if 0
                    image buff1 = get_image_from_stream_sj(pDetector->cap, &frameInfoWithCpy);
                    LOGV("last frame?=%p\n", buff1.data);
+                   free_image(buff1);
+                   #endif
                    break;
                 }
             }
@@ -406,7 +412,7 @@ void free_frame(tDetector* pDetector, tFrame* apFrame)
             free(apFrame->probs[i]);
         free(apFrame->probs);
     }
-    //free_image(pFrame->buff_letter);
+    //free_image(apFrame->buff_letter);
     free_BBs(apFrame->pBBs);
     free_image(apFrame->frameInfoWithCpy.im);
     free(apFrame);
@@ -812,6 +818,7 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
              *  6. mess_cleanup
              */
             
+            pDetector->fStartTime = get_wall_time();
             int nL, nFIdxToReadInto = 0; /**< nL is the count of total frames available in the hash for this go! */
             LOGV("second? %p\n", pDetector->pFramesHash[0]);
             if(pDetector->pFramesHash[0])
@@ -828,7 +835,19 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                 /** except for nFIdxToReadInto and nL-1, all frames are read only
                  * to do a smooth seek to the (nL-1)th frame */
                 tFrame* pFramePrev = (i > (nFIdxToReadInto+1)) ? pDetector->pFramesHash[i-1] : NULL; /**< frame to flush until nL */
-                pDetector->pFramesHash[i] = get_frame_from_cap(pDetector, NULL, pDetector->countFrame, 0, 0);
+                if(i >= (nFIdxToReadInto+1) && i < (nL-1))
+                {
+                    LOGV("seeking %d\n", i);
+                    if(cvGrabFrame(pDetector->cap))
+                        pDetector->pFramesHash[i] = (tFrame*)calloc(1, sizeof(tFrame));
+                    else
+                        pDetector->pFramesHash[i] = NULL;
+                }
+                else
+                {
+                    LOGV("reading %d\n", i);
+                    pDetector->pFramesHash[i] = get_frame_from_cap(pDetector, NULL, pDetector->countFrame, 0, 0);
+                }
                 if(!pDetector->pFramesHash[i])
                 {
                     if(i == nFIdxToReadInto)
@@ -856,6 +875,10 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                     pDetector->pFramesHash[i-1] = calloc(1, sizeof(tFrame));;
                 }
             }
+            pDetector->fEndTime = get_wall_time();
+            LOGV("[except for 1st print] seek took %fms; means read is @ %ffps\n", 
+                (pDetector->fEndTime - pDetector->fStartTime) * 1000.0,
+                (nL * 1.0) / (pDetector->fEndTime - pDetector->fStartTime));
             
             /** use the BBs at pDetector->pFramesHash[0]->pBBs and fetch the tracked replicas of them in
              * pDetector->pFramesHash[MAX_FRAMES_TO_HASH-1] */
@@ -887,6 +910,10 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
             {
                 LOGV("NOT RIGHT\n");
             }
+            pDetector->fEndTime = get_wall_time();
+            LOGV("detection, tracking, and interpolation took %fms; means it is @ %ffps\n", 
+                (pDetector->fEndTime - pDetector->fStartTime) * 1000.0,
+                (nL * 1.0) / (pDetector->fEndTime - pDetector->fStartTime));
             #if 1
             for(int i = nFIdxToReadInto; i < nL; i++)
             {
@@ -905,6 +932,10 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                     pDetector->pFramesHash[i] = NULL;
                 }
             }
+            pDetector->fEndTime = get_wall_time();
+            LOGV("detection, tracking, interpolation, and fire_cb took %fms; means it is @ %dfps\n", 
+                (pDetector->fEndTime - pDetector->fStartTime) * 1000.0,
+                (nL * 1.0) / (pDetector->fEndTime - pDetector->fStartTime));
             #endif
 #endif
             ++count;

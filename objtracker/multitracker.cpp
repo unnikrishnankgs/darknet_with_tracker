@@ -48,8 +48,10 @@
 #define OPTICAL_FLOW
 
 #define ABS_DIFF(a, b) ((a) > (b)) ? ((a)-(b)) : ((b)-(a))
-#define GOOD_IOU_THRESHOLD (0.2)
+#define GOOD_IOU_THRESHOLD (0.5)
 #define MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW 20
+
+#define CLASS_AGNOSTIC_BB_TRACKING
 
 extern "C"
 {
@@ -593,7 +595,7 @@ void assess_iou_trackedBBs_detectedBBs(tAnnInfo* pTrackedBBs,
     while(pBBD)
     {
         pBBD->fIoU = 0;
-        pBBD->bIoUAssigned = 0;
+        pBBD->bBBIDAssigned = 0;
         pBBD = pBBD->pNext;
     }
 
@@ -611,7 +613,7 @@ void assess_iou_trackedBBs_detectedBBs(tAnnInfo* pTrackedBBs,
         pBBD = pBBDWithMaxIoU = pDetectedBBs;
         while(pBBD)
         {
-            if(pBBD->bIoUAssigned)
+            if(pBBD->bBBIDAssigned)
             {
                 LOGV("IoU already assigned\n");
             }
@@ -628,7 +630,7 @@ void assess_iou_trackedBBs_detectedBBs(tAnnInfo* pTrackedBBs,
                     /** this is the tracked BB in pDetectedBBs,
                      * so copy the BBID into pDetectedBB candidate */
                     pBBDWithMaxIoU->nBBId = pBBT->nBBId;
-                    pBBDWithMaxIoU->bIoUAssigned = 1;
+                    pBBDWithMaxIoU->bBBIDAssigned = 1;
                     LOGV("changed detected BBID to %d\n", pBBDWithMaxIoU->nBBId);
                 }
             }
@@ -656,7 +658,7 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
     while(pBBD)
     {
         pBBD->fIoU = 0;
-        pBBD->bIoUAssigned = 0;
+        pBBD->bBBIDAssigned = 0;
         pBBD = pBBD->pNext;
     }
 
@@ -674,7 +676,7 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
         pBBD = pBBDWithMaxIoU = pDetectedBBs;
         while(pBBD)
         {
-            if(pBBD->bIoUAssigned)
+            if(pBBD->bBBIDAssigned)
             {
                 LOGV("IoU already assigned\n");
             }
@@ -712,17 +714,21 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
             /** select the best tracked BB as the final track result */
             LOGV("IoU=%f; currentMax=%f [%s] (%d, %d):(%d,%d)\n", pBBD->fIoU, pBBDWithMaxIoU->fIoU, pBBD->pcClassName, pBBD->x, pBBD->y, pBBT->x, pBBT->y);
             if(return_BB_with_best_iou(pBBDWithMaxIoU, pBBD) == pBBD /** best tracker IoU of the IoUs with detector BBs, save as current best */
-                && (strcmp(pBBT->pcClassName, pBBD->pcClassName) == 0))
+                #ifndef CLASS_AGNOSTIC_BB_TRACKING
+                && (strcmp(pBBT->pcClassName, pBBD->pcClassName) == 0)
+                #endif /**< CLASS_AGNOSTIC_BB_TRACKING */
+              )
             {
                 pTrackerBBs[i].bInDetectionList = 1;
-                if(pBBD->fIoU > GOOD_IOU_THRESHOLD)
+                if(pBBD->fIoU > GOOD_IOU_THRESHOLD
+                   && pBBD->bBBIDAssigned == 0)
                 {
                     LOGV("max IoU changed\n");
                     pBBDWithMaxIoU = pBBD;
                     /** this is the tracked BB in pDetectedBBs,
                      * so copy the BBID into pDetectedBB candidate */
                     pBBDWithMaxIoU->nBBId = pBBT->nBBId;
-                    pBBDWithMaxIoU->bIoUAssigned = 1;
+                    pBBDWithMaxIoU->bBBIDAssigned = 1;
                     LOGV("changed detected BBID to %d\n", pBBDWithMaxIoU->nBBId);
                 }
             }
