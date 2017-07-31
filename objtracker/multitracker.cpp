@@ -48,9 +48,11 @@
 #define USE_CV_TRACKING
 #define OPTICAL_FLOW
 #define OPTICAL_FLOW_APPROXIMATION
+#define OPT_FLOW_WINSIZE_W 250
+#define OPT_FLOW_WINSIZE_H 250
 
 #define ABS_DIFF(a, b) ((a) > (b)) ? ((a)-(b)) : ((b)-(a))
-#define GOOD_IOU_THRESHOLD (0.4)
+#define GOOD_IOU_THRESHOLD (0.5)
 #define MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW 5
 
 #define CLASS_AGNOSTIC_BB_TRACKING
@@ -381,7 +383,7 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
             cvtColor(imgBaseM, gray, COLOR_BGR2GRAY);
             //cornerSubPix(gray, points[0], subPixWinSize, Size(-1,-1), termcrit);
             //Size winSize(1920,1080);
-            Size winSize(100,100);
+            Size winSize(OPT_FLOW_WINSIZE_W, OPT_FLOW_WINSIZE_H);
             calcOpticalFlowPyrLK(imgBaseM, imgTargM, points[0], points[1], status, err, winSize,
                                  3, termcrit, 0, 0.001);
             size_t i, k;
