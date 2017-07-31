@@ -41,7 +41,7 @@
 
 #ifdef OPENCV
 
-#define MAX_FRAMES_TO_HASH 15
+#define MAX_FRAMES_TO_HASH 5
 
 #define ABS_DIFF(a, b) ((a) > (b)) ? ((a)-(b)) : ((b)-(a))
 
@@ -55,7 +55,6 @@ typedef struct
     network net;
     CvCapture * cap;
     float fps;
-    double fFps;
     double fStartTime;
     double fEndTime;
     float demo_thresh;
@@ -890,18 +889,8 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                     &pDetector->pFramesHash[nL-1]->frameInfoWithCpy,
                     &pDetector->pFramesHash[nL-1]->pBBs
                     );
-#if 0
-                pDetector->pFramesHash[nL-1]->pBBs = pOutBBs;
                 /** interpolate all the BBs for frames in between 0 and (nL-1) */
                 interpolate_bbs_btw_frames(pDetector, pDetector->pFramesHash, 0, nL-1);
-                pDetector->pFramesHash[nL-1]->pBBs = NULL;
-                detect_object_for_frame(pDetector, pDetector->pFramesHash[nL-1], count);
-                /** now do a IoU assessment btw the 2 BBs and come up with the list of BBs */
-                assess_iou_trackedBBs_detectedBBs(pOutBBs,
-                    pDetector->pFramesHash[nL-1]->pBBs
-                    );
-                free_BBs(pOutBBs);
-#endif
                 LOGV("BBs tracked=%p\n", pDetector->pFramesHash[nL-1]->pBBs);
     
             
@@ -933,7 +922,7 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                 }
             }
             pDetector->fEndTime = get_wall_time();
-            LOGV("detection, tracking, interpolation, and fire_cb took %fms; means it is @ %dfps\n", 
+            LOGV("detection, tracking, interpolation, and fire_cb took %fms; means it is @ %ffps\n", 
                 (pDetector->fEndTime - pDetector->fStartTime) * 1000.0,
                 (nL * 1.0) / (pDetector->fEndTime - pDetector->fStartTime));
             #endif
