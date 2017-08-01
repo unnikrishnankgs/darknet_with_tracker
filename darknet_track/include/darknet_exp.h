@@ -16,6 +16,7 @@ struct AnnInfo
      int nBBId;
      double fIoU; /**< used for processing IoU in darknet framework */
      char bBBIDAssigned;
+     int fDirection;
      tAnnInfo* pNext;
 };
 
@@ -57,5 +58,32 @@ inline void free_BBs(tAnnInfo* pBBs)
     }
 }
 
+inline tAnnInfo* copyBB(tAnnInfo* pBB)
+{
+    tAnnInfo* pBBN = (tAnnInfo*)malloc(sizeof(tAnnInfo));
+
+    memcpy(pBBN, pBB, sizeof(tAnnInfo));
+    pBBN->pcClassName = (char*)malloc(strlen(pBB->pcClassName) + 1);
+    strcpy(pBBN->pcClassName, pBB->pcClassName);
+    pBBN->pNext = NULL;
+
+    return pBBN;
+}
+
+inline void freeBB(tAnnInfo* pBB)
+{
+    pBB->pNext = NULL;
+    free_BBs(pBB);
+}
+
+inline double displacement_btw_BBs(tAnnInfo* pBB1, tAnnInfo* pBB2)
+{
+            double sqX = (double)(pBB2->x - pBB1->x);
+            sqX = sqX * sqX;
+            double sqY = (double)(pBB2->y - pBB1->y);
+            sqY = sqY * sqY;
+            double D = sqrt(sqX + sqY);
+            return D;
+}
 
 #endif

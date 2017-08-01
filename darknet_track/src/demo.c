@@ -41,7 +41,7 @@
 
 #ifdef OPENCV
 
-#define MAX_FRAMES_TO_HASH 5
+#define MAX_FRAMES_TO_HASH 2
 
 #define ABS_DIFF(a, b) ((a) > (b)) ? ((a)-(b)) : ((b)-(a))
 
@@ -546,15 +546,6 @@ void get_BB_from_bbbounds(tAnnInfo* pBB, tBBBounds* pBBB)
     pBB->h = pBBB->yMax - pBBB->yMin;
 }
 
-double displacement_btw_BBs(tAnnInfo* pBB1, tAnnInfo* pBB2)
-{
-            double sqX = (pBB2->x - pBB1->x);
-            sqX = sqX * sqX;
-            double sqY = (pBB2->y - pBB1->y);
-            sqY = sqY * sqY;
-            double D = sqrt(sqX + sqY);
-            return D;
-}
 
 tBBBounds interpolateBoundingBox(tBBBounds bbb1, tBBBounds bbb2, double fFrac)
 {

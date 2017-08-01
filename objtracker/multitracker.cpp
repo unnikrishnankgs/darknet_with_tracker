@@ -53,7 +53,7 @@
 
 #define ABS_DIFF(a, b) ((a) > (b)) ? ((a)-(b)) : ((b)-(a))
 #define GOOD_IOU_THRESHOLD (0.5)
-#define MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW 5
+#define MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW 0
 
 #define CLASS_AGNOSTIC_BB_TRACKING
 #define ASSIGN_BBID_ONLY_ONCE
@@ -76,12 +76,18 @@ typedef struct
     tAnnInfo opticalFlowBB;
     int bInDetectionList;
     tCandidateBB* pCandidateBBs; /**< a list of detected BBs that could be a match; copied from orig; pointers inside BBs will be hanging */
+    tAnnInfo* pBBT;
+    tAnnInfo* pBBTOrig;
 }tTrackerBBInfo;
 
 void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                 const int nTrackerInSlots,
-                tAnnInfo* pDetectedBBs);
+                tAnnInfo** ppDetectedBBs);
+tAnnInfo* make_copy_of_current_set(tAnnInfo* pDetectedBBs);
+int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs);
 }
+
+static tAnnInfo* pCopyDetectedBBs;
 
 tAnnInfo* get_apt_candidateBB(tTrackerBBInfo* pTrackerBBs, const int nTrackerInSlots, const int i);
 
@@ -398,6 +404,8 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
                 points[1][k++] = points[1][i];
                 circle( imgTargM, points[1][i], 3, Scalar(0,255,0), -1, 8);
             }
+            if( status[0] )
+            {
             points[1].resize(k);
             pBBTmp = &pTrackerBBs[idxIn].opticalFlowBB;
             memcpy(pBBTmp, pBB, sizeof(tAnnInfo));
@@ -408,6 +416,8 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
             pBBTmp->fCurrentFrameTimeStamp = pFTarg->fCurrentFrameTimeStamp;
             pBBTmp->pNext = pOpticalFlowOutBBs;
             pOpticalFlowOutBBs = pBBTmp;
+            }
+            pTrackerBBs[idxIn].pBBTOrig = pBB;
             idxIn++;
             pBB = pBB->pNext;
         }
@@ -461,6 +471,7 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
                     LOGD("unable to track this object in tracker\n");
                 }
             }
+            pTrackerBBs[idxIn].pBBTOrig = pBB;
             //objects.push_back(Rect2d(pBB->x, pBB->y, pBB->w, pBB->h));
             pBB = pBB->pNext;
             idxIn++;
@@ -483,7 +494,7 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
 #endif
         assess_iou_trackerBBs_detectedBBs(pTrackerBBs,
                     nInBBs,
-                    *appBoundingBoxesInOut
+                    appBoundingBoxesInOut
                     );
         //*appBoundingBoxesInOut = pTrackerOutBBs;
 #endif
@@ -675,10 +686,13 @@ void assess_iou_trackedBBs_detectedBBs(tAnnInfo* pTrackedBBs,
 
 void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                 const int nTrackerInSlots,
-                tAnnInfo* pDetectedBBs)
+                tAnnInfo** ppDetectedBBs)
 {
-    if(!pTrackerBBs || !pDetectedBBs)
+    tAnnInfo* pTrackedBBs = NULL;
+    if(!pTrackerBBs || !ppDetectedBBs)
         return;
+
+    tAnnInfo* pDetectedBBs = *ppDetectedBBs;
 
     tAnnInfo* ppBBT[2];
     tAnnInfo* pBBT = NULL;
@@ -758,7 +772,6 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                 #endif /**< CLASS_AGNOSTIC_BB_TRACKING */
               )
             {
-                pTrackerBBs[i].bInDetectionList = 1;
                 if(pBBT->fIoU > GOOD_IOU_THRESHOLD
                   )
                 {
@@ -792,37 +805,6 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
             pBBD = pBBD->pNext;
         }
 
-#if 0
-        if(pBBDCandidate)
-        {
-            pBBDCandidate->nBBId = pTrackerBBs[i].opticalFlowBB.nBBId;
-            pBBDCandidate->bBBIDAssigned = 1;
-            LOGV("max IoU changed\n");
-            /** this is the tracked BB in pDetectedBBs,
-             * so copy the BBID into pDetectedBB candidate */
-            LOGV("changed detected BBID to %d\n", pBBD->nBBId);
-        }
-#endif
-#if 0
-        if(pTrackerBBs[i].bInDetectionList == 0)
-        {
-            tAnnInfo* pBBTmp;
-            tAnnInfo* pBBTmp1 = NULL;
-            if(pTrackerBBs[i].opticalFlowBB.pcClassName)
-                pBBTmp1 = &pTrackerBBs[i].opticalFlowBB;
-            else if(pTrackerBBs[i].trackerBB.pcClassName)
-                pBBTmp1 = &pTrackerBBs[i].trackerBB;
-            if(pBBTmp1)
-            {
-                pBBTmp = (tAnnInfo*)malloc(sizeof(tAnnInfo));
-                memcpy(pBBTmp, pBBTmp1, sizeof(tAnnInfo));
-                pBBTmp->pcClassName = (char*)malloc(strlen(pBBTmp1->pcClassName) + 1);
-                strcpy(pBBTmp->pcClassName, pBBTmp1->pcClassName);
-            }
-            pBBTmp->pNext = pOutBBs;
-            pOutBBs = pBBTmp;
-        }
-#endif
     }
 
     /** now evaluate candidates and assign them in the best possible way */
@@ -838,12 +820,75 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
         LOGV("candidate=%p\n", pBBD);
         if(pBBD)
         {
+            pTrackerBBs[i].bInDetectionList = 1;
             pBBD->nBBId = pTrackerBBs[i].opticalFlowBB.nBBId;
             LOGV("new BBId=%d\n", pTrackerBBs[i].opticalFlowBB.nBBId);
+#ifdef SEE_TRACKING_ONLY
+            pTrackerBBs[i].pBBT = copyBB(pBBD);
+#endif
+            pBBD->fDirection = pBBD->x - pTrackerBBs[i].pBBTOrig->x > 0 ? 'L'  : 'R';
         }
 
+#if 0
+        if(pTrackerBBs[i].bInDetectionList == 0)
+        {
+            LOGV("not detected!!!!\n");
+            tAnnInfo* pBBTmp1 = NULL;
+            if(pTrackerBBs[i].opticalFlowBB.pcClassName)
+            {
+                pBBTmp1 = &pTrackerBBs[i].opticalFlowBB;
+                pBBTmp1->x -= pBBTmp1->w/2;
+                pBBTmp1->y -= pBBTmp1->h/2;
+            }
+#if 1
+            else if(pTrackerBBs[i].trackerBB.pcClassName)
+            {
+                pBBTmp1 = &pTrackerBBs[i].trackerBB;
+            }
+#endif
+            if(pBBTmp1)
+            {
+                if(check_if_new_BB_acceptable(pBBTmp1, pCopyDetectedBBs))
+                {
+                tAnnInfo* pBBTmp;
+                
+                pBBTmp = (tAnnInfo*)malloc(sizeof(tAnnInfo));
+                memcpy(pBBTmp, pBBTmp1, sizeof(tAnnInfo));
+                pBBTmp->pcClassName = (char*)malloc(strlen(pBBTmp1->pcClassName) + 1);
+                strcpy(pBBTmp->pcClassName, pBBTmp1->pcClassName);
+#ifndef SEE_TRACKING_ONLY
+                pBBTmp->pNext = pDetectedBBs;
+                pDetectedBBs = pBBTmp;
+#else
+                pTrackerBBs[i].pBBT = pBBTmp;
+#endif
+                pTrackerBBs[i].bInDetectionList = 1;
+                pBBD = pBBTmp;
+                pBBD->fDirection = pBBD->x - pTrackerBBs[i].pBBTOrig->x > 0 ? 'L'  : 'R';
+                }
+            }
+        }
+#endif
+
+#ifdef SEE_TRACKING_ONLY
+        if(pTrackerBBs[i].bInDetectionList == 1)
+        {
+            pTrackerBBs[i].pBBT->pNext = pTrackedBBs;
+            pTrackedBBs = pTrackerBBs[i].pBBT;
+        }
+#endif
         
     }
+
+#ifdef SEE_TRACKING_ONLY
+    free_BBs(pDetectedBBs);
+    *ppDetectedBBs = pTrackedBBs;
+#else
+    *ppDetectedBBs = pDetectedBBs;
+#endif
+
+    free_BBs(pCopyDetectedBBs);
+    pCopyDetectedBBs = make_copy_of_current_set(*ppDetectedBBs);
     
 
 #if 0
@@ -909,4 +954,43 @@ tAnnInfo* get_apt_candidateBB(tTrackerBBInfo* pTrackerBBs, const int nTrackerInS
     }
     LOGV("DEBUGME\n");
     return NULL;
+}
+
+tAnnInfo* make_copy_of_current_set(tAnnInfo* pDetectedBBs)
+{
+    tAnnInfo* pBBD = pDetectedBBs;
+    tAnnInfo* pCDetectedBBs = NULL;
+
+    tAnnInfo* pBBTmp;
+
+    while(pBBD)
+    {
+        pBBTmp = copyBB(pBBD);
+        pBBTmp->pNext = pCDetectedBBs;
+        pCDetectedBBs = pBBTmp;
+        pBBD = pBBD->pNext;
+    }
+
+    return pCDetectedBBs;
+}
+
+int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs)
+{
+    tAnnInfo* pBBD = apCopyDetectedBBs;
+    double disp;
+
+    while(pBBD)
+    {
+        if(pBBD->nBBId == pBBIn->nBBId)
+        {
+            disp = displacement_btw_BBs(pBBD, pBBIn);
+            LOGV("disp is %f %s %d\n", disp, pBBIn->pcClassName, pBBD->nBBId);
+            pBBIn->fDirection = pBBIn->x - pBBD->x > 0 ? 'L'  : 'R';
+            if(disp > 0.0 && pBBIn->fDirection == pBBD->fDirection)
+                return 1;
+        }
+        pBBD = pBBD->pNext;
+    }
+
+    return 0;
 }
