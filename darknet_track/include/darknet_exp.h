@@ -27,6 +27,10 @@ typedef struct
      double fCurrentFrameTimeStamp;
 }tFrameInfo;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef int (*tfnRaiseAnnCb)(tAnnInfo apAnnInfo);
 typedef struct
 {
@@ -86,4 +90,20 @@ inline double displacement_btw_BBs(tAnnInfo* pBB1, tAnnInfo* pBB2)
             return D;
 }
 
+inline tAnnInfo* getBBById(tAnnInfo* pBBs, int nBBId)
+{
+    tAnnInfo* pBB = pBBs;
+    while(pBB)
+    {
+        if(pBB->nBBId == nBBId)
+            return pBB;
+        pBB = pBB->pNext;
+    }
+
+    return NULL;
+}
+
+#ifdef __cplusplus
+}
+#endif
 #endif

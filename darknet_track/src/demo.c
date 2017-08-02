@@ -10,6 +10,7 @@
 #include <sys/time.h>
 #include "darknet_exp.h"
 #include "multitracker.h"
+#include "cJSON.h"
 //#include <opencv2/opencv.hpp>
 
 #define DEMO 1
@@ -80,6 +81,7 @@ typedef struct
     int nBBCount;
     double countFrame;
     double totalFramesInVid;
+    tLanesInfo* pLanesInfo;
 }tDetector;
 
 struct Frame
@@ -854,7 +856,90 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                 }
                 if(i == 0)
                 {
-                    LOGV("do the one time detect\n");
+                    FILE* pFile = fopen("lanes.json", "r");
+                    if(pFile && !pDetector->pLanesInfo)
+                    {
+                        cJSON* pJSONPolys = NULL;
+                        {
+                            char* lane_info = calloc(1, 10240);
+                            int i = 0;
+                            while(fread(&lane_info[i], sizeof(char), 1, pFile))
+                            {
+                                i++;
+                            }
+                            LOGV("lane_info is [%s]\n", lane_info);
+                            pJSONPolys = cJSON_Parse(lane_info);
+                            free(lane_info);
+                        }
+                        int nJSONPolys = 0;
+                        if(pJSONPolys && (nJSONPolys = cJSON_GetArraySize(pJSONPolys)))
+                        {
+                            pDetector->pLanesInfo = (tLanesInfo*)calloc(1, sizeof(tLanesInfo));
+                            for(int j = 0; j < nJSONPolys; j++)
+                            {
+                                cJSON* pJSONPoly = cJSON_GetArrayItem(pJSONPolys, j);
+                                int nJSONVs = 0;
+                                if(pJSONPoly && (nJSONVs = cJSON_GetArraySize(pJSONPoly)))
+                                {
+                                    tPolygon* pP = (tPolygon*)calloc(1, sizeof(tPolygon));
+                                    pP->nLaneId = j;
+                                    for(int k = 0; k < nJSONVs; k++)
+                                    {
+                                        tVertex* pV = (tVertex*)calloc(1, sizeof(tVertex));
+                                        cJSON* pJVertex = cJSON_GetArrayItem(pJSONPoly, k);
+                                        cJSON* pJX = cJSON_GetObjectItem(pJVertex, "x");
+                                        cJSON* pJY = cJSON_GetObjectItem(pJVertex, "y");
+                                        LOGV("point is (%d, %d)\n", pJX->valueint, pJY->valueint);
+                                        pV->x = pJX->valueint;
+                                        pV->y = pJY->valueint;
+                                        pP->nVs++;
+                                        pV->pNext = pP->pVs;
+                                        pP->pVs = pV;
+                                    }
+                                    pP->pNext = pDetector->pLanesInfo->pPolygons;
+                                    pDetector->pLanesInfo->pPolygons = pP;
+                                    pDetector->pLanesInfo->nPolygons++;
+                                }
+                            }
+                        }
+                        cJSON_free(pJSONPolys);
+                    }
+                    if(!pDetector->pLanesInfo) 
+                    {
+                        /** ask user to provide the lane info */
+                        pDetector->pLanesInfo = getLaneInfo(&pDetector->pFramesHash[0]->frameInfoWithCpy);
+                        LOGV("polygons info=%p\n", pDetector->pLanesInfo);
+                        cJSON* pJSONPolys = cJSON_CreateArray();
+                        if(pDetector->pLanesInfo)
+                        {
+                            tPolygon* pP = pDetector->pLanesInfo->pPolygons;
+                            while(pP)
+                            {
+                                cJSON* pJSONPoly = cJSON_CreateArray();
+                                /** polygon: list of vertices in order */
+                                tVertex* pV = pP->pVs;
+                                while(pV)
+                                {
+                                    cJSON* pJX = cJSON_CreateNumber(pV->x);
+                                    cJSON* pJY = cJSON_CreateNumber(pV->y);
+                                    cJSON* pJVertex = cJSON_CreateObject();
+                                    cJSON_AddItemToObject(pJVertex, "x", pJX);
+                                    cJSON_AddItemToObject(pJVertex, "y", pJY);
+                                    cJSON_AddItemToArray(pJSONPoly, pJVertex);
+                                    pV = pV->pNext;
+                                }
+                                cJSON_AddItemToArray(pJSONPolys, pJSONPoly);
+                                pP = pP->pNext;
+                            }
+                        }
+                        LOGV("polygon info: [%s]\n", cJSON_Print(pJSONPolys));
+                        LOGV("do the one time detect\n");
+                        FILE* pFile = fopen("lanes.json", "w");
+                        fprintf(pFile, "%s", cJSON_Print(pJSONPolys));
+                        fclose(pFile);
+                        cJSON_free(pJSONPolys);
+                    }
+                    display_lanes_info(pDetector->pLanesInfo);
                     detect_object_for_frame(pDetector, pDetector->pFramesHash[0], count);
                 }
                 pDetector->countFrame++;

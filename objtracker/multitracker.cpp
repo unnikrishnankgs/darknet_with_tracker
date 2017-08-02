@@ -30,6 +30,7 @@
 //#define DEBUG
 #define VERBOSE
 #include "debug.h"
+#include "semaphore.h"
 
 #ifdef HAVE_OPENCV
 #include <opencv2/flann.hpp>
@@ -85,6 +86,7 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                 tAnnInfo** ppDetectedBBs);
 tAnnInfo* make_copy_of_current_set(tAnnInfo* pDetectedBBs);
 int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs);
+int isWithinBB(tAnnInfo* pBBP, tAnnInfo* pBBD);
 }
 
 static tAnnInfo* pCopyDetectedBBs;
@@ -242,7 +244,7 @@ int main( int argc, char** argv ){
 /** synchronous function
  * caller is responsible for image data passed
  */
-static Mat image_to_mat(tFrameInfo* pF)
+static Mat image_to_mat(tFrameInfo* pF, bool copy)
 {
     IplImage* ipl;
 
@@ -250,7 +252,7 @@ static Mat image_to_mat(tFrameInfo* pF)
     ipl->widthStep = pF->widthStep;
     LOGV("width=%d\n", ipl->widthStep);
     ipl->imageData = (char*)pF->im.data;
-    return cvarrToMat(ipl);
+    return cvarrToMat(ipl, copy);
 }
 
 int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInfo* pFTarg, tAnnInfo** appBoundingBoxesInOut)
@@ -278,8 +280,8 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
     pTrackerBBs = (tTrackerBBInfo*)calloc(nInBBs, sizeof(tTrackerBBInfo));
 
     LOGV("DEBUGME w=%d h=%d pFBase->im.c=%d\n", pFBase->im.w, pFBase->im.h, pFBase->im.c);
-    imgBaseM = image_to_mat(pFBase);
-    imgTargM = image_to_mat(pFTarg);
+    imgBaseM = image_to_mat(pFBase, false);
+    imgTargM = image_to_mat(pFTarg, false);
 
 #if 0
     imshow("base", imgBaseM);
@@ -390,6 +392,10 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
             //cornerSubPix(gray, points[0], subPixWinSize, Size(-1,-1), termcrit);
             //Size winSize(1920,1080);
             Size winSize(OPT_FLOW_WINSIZE_W, OPT_FLOW_WINSIZE_H);
+#if 0
+            std::vector<Mat> pyramid;
+            buildOpticalFlowPyramid(imgBaseM, pyramid, winSize, 2, true);
+#endif
             calcOpticalFlowPyrLK(imgBaseM, imgTargM, points[0], points[1], status, err, winSize,
                                  3, termcrit, 0, 0.001);
             size_t i, k;
@@ -409,8 +415,13 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
             points[1].resize(k);
             pBBTmp = &pTrackerBBs[idxIn].opticalFlowBB;
             memcpy(pBBTmp, pBB, sizeof(tAnnInfo));
+#if 1
             pBBTmp->x = (int)(points[1][0].x);
             pBBTmp->y = (int)(points[1][0].y);
+#else
+            pBBTmp->x = (int)(points[1][0].x - ((pBB->w * 1.0)/2));
+            pBBTmp->y = (int)(points[1][0].y - ((pBB->h * 1.0)/2));
+#endif
             pBBTmp->pcClassName = (char*)malloc(strlen(pBB->pcClassName) + 1);
             strcpy(pBBTmp->pcClassName, pBB->pcClassName);
             pBBTmp->fCurrentFrameTimeStamp = pFTarg->fCurrentFrameTimeStamp;
@@ -549,7 +560,7 @@ int tracker_display_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase)
     }
 
     LOGV("DEBUGME w=%d h=%d pFBase->im.c=%d\n", pFBase->im.w, pFBase->im.h, pFBase->im.c);
-    imgBaseM = image_to_mat(pFBase);
+    imgBaseM = image_to_mat(pFBase, false);
 
     pBB = apBoundingBoxesIn;
     while(pBB)
@@ -745,13 +756,39 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                     ppBBT[k]->fIoU = find_iou(ppBBT[k], pBBD);
 #ifdef OPTICAL_FLOW_APPROXIMATION
                     if(k == 1)
+                    {
+#if 0
+                        AnnInfo tmpT = *ppBBT[k];
+                        tmpT.x -= (tmpT.w/2);
+                        tmpT.y -= (tmpT.h/2);
+                        ppBBT[k]->fIoU = find_iou(&tmpT, pBBD);
+                        /** if this BB did not move much from previous, use median flow */
+                        tAnnInfo* pBBTmp = getBBById(pCopyDetectedBBs, ppBBT[k]->nBBId);
+                        double disp = 0;
+                        if(pBBTmp && ((disp = displacement_btw_BBs(&tmpT, pBBTmp)) == 0.0)) /**< use median flow */
+                        {
+                            continue;
+                        }
+                        LOGV("displacement (%p) is %f %d\n", pBBTmp, disp,  pBBTmp ? MAX(pBBTmp->w, pBBTmp->h) : 0);
+#endif
+#if 1
                         if((ppBBT[k]->x < pBBD->x + pBBD->w + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
                            && (ppBBT[k]->y  < pBBD->y + pBBD->h + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
                            && (ppBBT[k]->x > (pBBD->x > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->x - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0)) 
                            && (ppBBT[k]->y > (pBBD->y > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->y - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0))
                           )
-                            ppBBT[k]->fIoU = 1.0; /**< optical flow alone can have this way */
+#else
+                        if((ppBBT[k]->x < pBBD->x + ((pBBD->w * 3.0) / 4) + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
+                           && (ppBBT[k]->y  < pBBD->y + ((pBBD->h * 3.0) / 4)  + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
+                           && (ppBBT[k]->x > (pBBD->x > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? (pBBD->x + ((pBBD->w * 1.0) / 4)) - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0)) 
+                           && (ppBBT[k]->y > (pBBD->y > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? (pBBD->y + ((pBBD->h * 1.0) / 4) ) - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0))
+                          )
 #endif
+                        {
+                            ppBBT[k]->fIoU = 1.0; /**< optical flow alone can have this way */
+                        }
+#endif
+                    }
                 }
             }
             LOGV("IoU results %f %f\n", ppBBT[0]->fIoU, ppBBT[1]->fIoU);
@@ -822,6 +859,7 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
         {
             pTrackerBBs[i].bInDetectionList = 1;
             pBBD->nBBId = pTrackerBBs[i].opticalFlowBB.nBBId;
+            pBBD->bBBIDAssigned = 1;
             LOGV("new BBId=%d\n", pTrackerBBs[i].opticalFlowBB.nBBId);
 #ifdef SEE_TRACKING_ONLY
             pTrackerBBs[i].pBBT = copyBB(pBBD);
@@ -840,7 +878,7 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                 pBBTmp1->x -= pBBTmp1->w/2;
                 pBBTmp1->y -= pBBTmp1->h/2;
             }
-#if 1
+#if 0
             else if(pTrackerBBs[i].trackerBB.pcClassName)
             {
                 pBBTmp1 = &pTrackerBBs[i].trackerBB;
@@ -878,6 +916,23 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
         }
 #endif
         
+    }
+
+    pBBD = pDetectedBBs;
+    while(pBBD)
+    {
+        for(int i = 0; i < nTrackerInSlots; i++)
+        {
+            if(!pTrackerBBs[i].bInDetectionList)
+            {
+                if(isWithinBB(&pTrackerBBs[i].opticalFlowBB, pBBD))
+                {
+                    LOGV("found in final parse\n");
+                    pBBD->nBBId = pTrackerBBs[i].opticalFlowBB.nBBId;
+                }
+            }
+        }
+        pBBD = pBBD->pNext;
     }
 
 #ifdef SEE_TRACKING_ONLY
@@ -974,6 +1029,23 @@ tAnnInfo* make_copy_of_current_set(tAnnInfo* pDetectedBBs)
     return pCDetectedBBs;
 }
 
+// This function calculates the angle of the line from A to B with respect to the positive X-axis in degrees
+int angle(Point2f A, Point2f B) {
+	int val = (B.y-A.y)/(B.x-A.x); // calculate slope between the two points
+	val = val - pow(val,3)/3 + pow(val,5)/5; // find arc tan of the slope using taylor series approximation
+	val = ((int)(val*180/3.14)) % 360; // Convert the angle in radians to degrees
+	if(B.x < A.x) val+=180;
+	if(val < 0) val = 360 + val;
+	return val;
+}
+
+int getDirection(tAnnInfo* pBBFrom, tAnnInfo* pBBTo)
+{
+        Point2f A(pBBFrom->x, pBBFrom->y);    
+        Point2f B(pBBTo->x, pBBTo->y);
+        return angle(A, B);
+}
+
 int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs)
 {
     tAnnInfo* pBBD = apCopyDetectedBBs;
@@ -986,11 +1058,230 @@ int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs)
             disp = displacement_btw_BBs(pBBD, pBBIn);
             LOGV("disp is %f %s %d\n", disp, pBBIn->pcClassName, pBBD->nBBId);
             pBBIn->fDirection = pBBIn->x - pBBD->x > 0 ? 'L'  : 'R';
-            if(disp > 0.0 && pBBIn->fDirection == pBBD->fDirection)
+            if(disp > 0.0 
+                //&& pBBIn->fDirection == pBBD->fDirection
+                )
                 return 1;
         }
         pBBD = pBBD->pNext;
     }
 
     return 0;
+}
+
+class Polygons
+{
+     public:
+     tLanesInfo* pLanesInfo;
+     vector<Point> vertices;
+     Mat imgBaseM;
+     Mat ROI;
+     sem_t sem;
+     bool finished;
+
+     public:
+     Polygons(Mat& img, Mat& roi)
+     {
+        imgBaseM = img;
+        ROI = roi;
+        sem_init(&sem, 0, 0);
+        finished = 0;
+        pLanesInfo = (tLanesInfo*)calloc(1, sizeof(tLanesInfo));
+     }
+};
+
+void mouseHandler(int event,int x,int y,int flags,void* userdata)
+{
+   Polygons* poly = (Polygons*)userdata;
+#if 1
+   if(event==EVENT_RBUTTONDOWN){
+      cout << "Right mouse button clicked at (" << x << ", " << y << ")" << endl;
+      if(poly->vertices.size()<2){
+         cout << "You need a minimum of three points!" << endl;
+         return;
+      }
+      // Close polygon
+      line(poly->imgBaseM,poly->vertices[poly->vertices.size()-1],poly->vertices[0],Scalar(0,0,0));
+
+      tPolygon* polygon = (tPolygon*)calloc(1, sizeof(tPolygon));
+      for(int i = 0; i < poly->vertices.size(); i++)
+      {
+          tVertex* pV = (tVertex*)calloc(1, sizeof(tVertex));
+          pV->x = poly->vertices[i].x;
+          pV->y = poly->vertices[i].y;
+          pV->pNext = polygon->pVs;
+          polygon->pVs = pV;
+          polygon->nVs++;
+      }
+      polygon->pNext = poly->pLanesInfo->pPolygons;
+      poly->pLanesInfo->pPolygons = polygon;
+      poly->pLanesInfo->nPolygons++;
+      poly->vertices.clear();
+
+      // Mask is black with white where our ROI is
+      //Mat mask= Mat::zeros(poly->imgBaseM.rows,poly->imgBaseM.cols,CV_8UC1);
+      //vector<vector<Point>> pts{poly->vertices};
+      LOGV("DEBUGME\n");
+      //fillPoly(mask,poly->vertices,Scalar(255,255,255));
+      LOGV("DEBUGME\n");
+      //poly->imgBaseM.copyTo(poly->ROI,mask);
+      LOGV("DEBUGME\n");
+      //finished=true;
+
+      return;
+   }
+   if(event==EVENT_LBUTTONDOWN){
+      cout << "Left mouse button clicked at (" << x << ", " << y << ")" << endl;
+      if(poly->vertices.size()==0){
+         // First click - just draw point
+         poly->imgBaseM.at<Vec3b>(x,y)=Vec3b(255,0,0);
+      } else {
+         // Second, or later click, draw line to previous vertex
+         line(poly->imgBaseM,Point(x,y),poly->vertices[poly->vertices.size()-1],Scalar(0,0,0));
+      }
+      poly->vertices.push_back(Point(x,y));
+      return;
+   }
+
+   if(event==EVENT_MBUTTONDOWN)
+   {
+     LOGV("LButton double clicked\n");
+     poly->finished = true;
+     return;
+   }
+#endif
+}
+
+
+tLanesInfo* getLaneInfo(tFrameInfo* pFrame)
+{
+    Mat imgBaseM = image_to_mat(pFrame, true);
+    Mat roi;
+    Polygons polygons(imgBaseM, roi);
+    tLanesInfo* pPI = NULL;
+    const char* winName = "draw lanes";
+    cv::imshow(winName, imgBaseM);
+    cv::setMouseCallback(winName, mouseHandler, &polygons);
+    while(!polygons.finished)
+    {
+       cv::imshow(winName, imgBaseM);
+       waitKey(50);     
+    }
+    
+    pPI = polygons.pLanesInfo;
+    //cvReleaseImage();
+    destroyWindow(winName);
+    return pPI;
+}
+
+// Define Infinite (Using INT_MAX caused overflow problems)
+#define INF 10000
+
+// Given three colinear points p, q, r, the function checks if
+// point q lies on line segment 'pr'
+bool onSegment(tVertex p, tVertex q, tVertex r)
+{
+    if (q.x <= max(p.x, r.x) && q.x >= min(p.x, r.x) &&
+            q.y <= max(p.y, r.y) && q.y >= min(p.y, r.y))
+        return true;
+    return false;
+}
+ 
+// To find orientation of ordered triplet (p, q, r).
+// The function returns following values
+// 0 --> p, q and r are colinear
+// 1 --> Clockwise
+// 2 --> Counterclockwise
+int orientation(tVertex p, tVertex q, tVertex r)
+{
+    int val = (q.y - p.y) * (r.x - q.x) -
+              (q.x - p.x) * (r.y - q.y);
+ 
+    if (val == 0) return 0;  // colinear
+    return (val > 0)? 1: 2; // clock or counterclock wise
+}
+ 
+// The function that returns true if line segment 'p1q1'
+// and 'p2q2' intersect.
+bool doIntersect(tVertex p1, tVertex q1, tVertex p2, tVertex q2)
+{
+    // Find the four orientations needed for general and
+    // special cases
+    int o1 = orientation(p1, q1, p2);
+    int o2 = orientation(p1, q1, q2);
+    int o3 = orientation(p2, q2, p1);
+    int o4 = orientation(p2, q2, q1);
+ 
+    // General case
+    if (o1 != o2 && o3 != o4)
+        return true;
+ 
+    // Special Cases
+    // p1, q1 and p2 are colinear and p2 lies on segment p1q1
+    if (o1 == 0 && onSegment(p1, p2, q1)) return true;
+ 
+    // p1, q1 and p2 are colinear and q2 lies on segment p1q1
+    if (o2 == 0 && onSegment(p1, q2, q1)) return true;
+ 
+    // p2, q2 and p1 are colinear and p1 lies on segment p2q2
+    if (o3 == 0 && onSegment(p2, p1, q2)) return true;
+ 
+     // p2, q2 and q1 are colinear and q1 lies on segment p2q2
+    if (o4 == 0 && onSegment(p2, q1, q2)) return true;
+ 
+    return false; // Doesn't fall in any of the above cases
+}
+
+// Returns true if the point p lies inside the polygon[] with n vertices
+bool isInside(tPolygon* pPolygon, tVertex p)
+{
+    // There must be at least 3 vertices in polygon[]
+    if (!pPolygon || !pPolygon->pVs || (pPolygon->nVs < 3))  return false;
+
+    int n = pPolygon->nVs;
+    tVertex* pP = pPolygon->pVs;
+ 
+    // Create a point for line segment from p to infinite
+    tVertex extreme = {INF, p.y};
+ 
+    // Count intersections of the above line with sides of polygon
+    int count = 0, i = 0;
+    do
+    {
+        tVertex nextV = pP->pNext ? *(pP->pNext) : *(pPolygon->pVs);
+        // Check if the line segment from 'p' to 'extreme' intersects
+        // with the line segment from 'polygon[i]' to 'polygon[next]'
+        if (doIntersect(*pP, nextV, p, extreme))
+        {
+            // If the point 'p' is colinear with line segment 'i-next',
+            // then check if it lies on segment. If it lies, return true,
+            // otherwise false
+            if (orientation(*pP, p, nextV) == 0)
+               return onSegment(*pP, p, nextV);
+ 
+            count++;
+        }
+        pP = pP->pNext;
+    } while (i != 0);
+ 
+    // Return true if count is odd, false otherwise
+    return count&1;  // Same as (count%2 == 1)
+}
+
+int isWithinPolygon(tPolygon* pLane, tVertex* pVertex)
+{
+    if(!pLane || !pVertex)
+        return 0;
+    return isInside(pLane, *pVertex);
+}
+
+int isWithinBB(tAnnInfo* pBBP, tAnnInfo* pBBD)
+{
+        if((pBBP->x < pBBD->x + pBBD->w + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
+                           && (pBBP->y  < pBBD->y + pBBD->h + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
+                           && (pBBP->x > (pBBD->x > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->x - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0)) 
+                           && (pBBP->y > (pBBD->y > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->y - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0))
+                          )
+                return 1;
+        return 0;
 }

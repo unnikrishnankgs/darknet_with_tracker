@@ -1,0 +1,1 @@
+./darknet detector demo cfg/aic.data cfg/yolo-aic.cfg ~/aic/weights_22Jul/yolo-aic_20000.weights /media/unnikrishnan/DATA/nvidia/res_videos/media/video/1080p/1080P_WALSH_SANTOMAS/1080p/1080p_WALSH_SANTOMAS\ 0602/1080p_WALSH_ST_000.mp4 > out.txt
