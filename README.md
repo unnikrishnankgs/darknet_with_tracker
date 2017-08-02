@@ -41,3 +41,13 @@ include/darknet_exp.h for the interface.
 Call darknet using run_detector_model() function.
 The data structures should be self-explanatory 
 [We shall add documentation soon..]
+
+RUN:
+see: darknet_track/rundarknet.sh; EDIT it and:
+./rundarknet.sh
+
+unable to load libraries?
+Dynamic library paths if not in the system defined paths shall be set via LD_LIBRARY_PATH on linux systems (DYLD_LIBRARY_PATH in OS X)
+See: darknet_track/exports.sh; no need to edit for linux; Just do:
+$cd darknet_track
+$source exports.sh
