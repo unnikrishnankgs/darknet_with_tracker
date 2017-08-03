@@ -41,7 +41,7 @@
 #define GREEN   "\033[32m"      /* Green */
 
 //#define USE_MULTI_TRACKER
-#define DISPLAY_RESULTS
+//#define DISPLAY_RESULTS
 #define MAX_TRACK_ITERATIONS 1
 
 #define TRACKING_ALGO "MEDIAN_FLOW"

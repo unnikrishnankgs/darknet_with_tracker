@@ -17,7 +17,7 @@
 
 /** { ISVA */
 //#define ENABLE_VIDEO_FILE_READ_AT_TAR_FPS
-#define DISPLAY_RESULS
+//#define DISPLAY_RESULS
 
 /** shall track BBs in the same frame */
 //#define TEST_TRACKING
