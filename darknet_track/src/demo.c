@@ -102,6 +102,7 @@ struct Frame
 static void test_detector_on_img(tDetector* pDetector, char *datacfg, char *cfgfile, char *weightfile, char *filename, float thresh, float hier_thresh, char *outfile, int fullscreen);
 void *display_in_thread(void *ptr);
 void free_frame(tDetector* pDetector, tFrame* apFrame);
+void dump_lane_info(tLanesInfo* pLanesInfo);
 
 void init_globals(tDetector* pDetector)
 {
@@ -672,10 +673,12 @@ void detect_object_for_frame(tDetector* pDetector, tFrame* pFrame, int count)
 
 }
 
+char folder_name[100];
 
 void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int cam_index, const char *filename, char **names, int classes, int delay, char *prefix, int avg_frames, float hier, int w, int h, int frames, int fullscreen)
 {
     tDetector* pDetector = (tDetector*)apDetector;
+    double prevDumpTime = get_wall_time();
     LOGD("DEBUGME\n");
 
     pDetector->demo_delay = delay;
@@ -710,6 +713,8 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
     if(filename){
         LOGD("video file: %s\n", filename);
         pDetector->cap = cvCaptureFromFile(filename);
+        strcpy(folder_name, strstr(filename, ".mp4") - 10);
+        LOGV("folder name is %s\n", folder_name);
         LOGD("DEBUGME %p\n", pDetector->cap);
     }else{
         pDetector->cap = cvCaptureFromCAM(cam_index);
@@ -989,6 +994,8 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                             pDetector->pLanesInfo->ppRouteTrafficInfo[j][k].nTypes = pDetector->demo_classes;
                         }
                     }
+                    pDetector->pLanesInfo->names = pDetector->demo_names;
+                    pDetector->pLanesInfo->nTypes = pDetector->demo_classes;
                     display_lanes_info(pDetector->pLanesInfo);
                     detect_object_for_frame(pDetector, pDetector->pFramesHash[0], count);
                 }
@@ -1066,6 +1073,15 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
         }
         LOGD("DEBUGME\n");
         pDetector->nCurFrameCount++;
+
+
+        /** dump lane info as and when needed */
+        if((get_wall_time() - prevDumpTime >= (10.0 * 60 * 30))
+            || pDetector->demo_done)
+        {
+            prevDumpTime = get_wall_time();
+            dump_lane_info(pDetector->pLanesInfo);
+        }
     }
 
     
@@ -1278,3 +1294,72 @@ static void test_detector_on_img(tDetector* pDetector, char *datacfg, char *cfgf
     }
 }
 
+void dump_lane_info(tLanesInfo* pLanesInfo)
+{
+    char filename[500] = {0};
+    char cmd[500] = {0};
+    snprintf(cmd, 500, "mkdir /data/team1_darknet/%s", folder_name);
+    system(cmd);
+    snprintf(filename, 500, "/data/team1_darknet/%s/traffic_pattern_%f", folder_name, get_wall_time());
+    FILE* fp = fopen(filename, "w");
+    if(pLanesInfo && fp)
+    {   
+        tLane* pL = pLanesInfo->pLanes;
+        cJSON* pJSONLaneArr = cJSON_CreateArray();
+        LOGV("DEBUGME\n");
+        while(pL)
+        {   
+            /** polygon: list of vertices in order */
+            LOGV("Lane %p ID: %d; route:[%s] vertices:\n", pL, pL->nLaneId, pL->pcRoute);
+            cJSON* pJSONLaneInfo = cJSON_CreateObject();
+            cJSON_AddNumberToObject(pJSONLaneInfo, "laneid", pL->nLaneId); 
+            cJSON_AddStringToObject(pJSONLaneInfo, "route", pL->pcRoute);
+        LOGV("DEBUGME\n");
+            for(int k = 1; k < pLanesInfo->nTypes; k++)
+            {
+        LOGV("DEBUGME %s\n", pLanesInfo->names[k]);
+                cJSON_AddNumberToObject(pJSONLaneInfo, pLanesInfo->names[k], pL->pnVehicleCount[k]);
+            }
+        LOGV("DEBUGME\n");
+            cJSON_AddNumberToObject(pJSONLaneInfo, "avg-stay-time", pL->fAvgStayDuration);
+            cJSON_AddNumberToObject(pJSONLaneInfo, "total-vehicles", pL->nTotalVehiclesSoFar);
+            cJSON_AddItemToArray(pJSONLaneArr, pJSONLaneInfo);
+        LOGV("DEBUGME\n");
+            pL = pL->pNext;
+        }   
+        LOGV("DEBUGME\n");
+        cJSON* pJSONMat = cJSON_CreateObject();
+        for(int i = 1; i < pLanesInfo->nLanes+1; i++)
+        {
+        LOGV("DEBUGME\n");
+            cJSON* pJSONFrom = cJSON_CreateObject();
+            char pcFrom[50] = {0};
+            snprintf(pcFrom, 50, "from_%d", i);
+        LOGV("DEBUGME\n");
+            for(int j = 1; j < pLanesInfo->nLanes+1; j++)
+            {
+                cJSON* pJSONFromTo = cJSON_CreateObject();
+                char pcFromTo[1000] = {0};
+                snprintf(pcFromTo, 1000, "from_%d_to_%d_%s_to_%s", i, j, getLaneById(pLanesInfo, i)->pcRoute, getLaneById(pLanesInfo, j)->pcRoute);
+        LOGV("DEBUGME\n");
+                for(int k = 1; k < pLanesInfo->nTypes; k++)
+                {
+        LOGV("DEBUGME\n");
+                    cJSON_AddNumberToObject(pJSONFromTo, pLanesInfo->names[k], pLanesInfo->ppRouteTrafficInfo[i][j].pnVehicleCount[k]);
+                }
+        LOGV("DEBUGME\n");
+                cJSON_AddItemToObject(pJSONFrom, pcFromTo, pJSONFromTo);
+            }
+        LOGV("DEBUGME\n");
+            cJSON_AddItemToObject(pJSONMat, pcFrom, pJSONFrom);
+        }
+        LOGV("DEBUGME\n");
+        cJSON* pJSONFinalPattern = cJSON_CreateObject();
+        cJSON_AddItemToObject(pJSONFinalPattern, "lanes_info", pJSONLaneArr);
+        cJSON_AddItemToObject(pJSONFinalPattern, "traffic_flux", pJSONMat);
+        LOGV("final pattern:[%s]\n", cJSON_Print(pJSONFinalPattern));
+        fwrite(cJSON_Print(pJSONFinalPattern), 1, strlen(cJSON_Print(pJSONFinalPattern)), fp);
+        cJSON_free(pJSONFinalPattern);
+        fclose(fp);
+    }   
+}

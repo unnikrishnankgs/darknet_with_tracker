@@ -46,6 +46,8 @@ typedef struct
    tLane* pLanes;
    int nLanes;
    tRouteTrafficInfo** ppRouteTrafficInfo; /**< 2D array; nLanes X nLanes */
+   char** names;
+   int nTypes;
 }tLanesInfo;
 
 inline tLane* getLaneById(tLanesInfo* pLanesInfo, int nLaneId)
