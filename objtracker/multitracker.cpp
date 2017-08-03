@@ -54,7 +54,7 @@
 
 #define ABS_DIFF(a, b) ((a) > (b)) ? ((a)-(b)) : ((b)-(a))
 #define GOOD_IOU_THRESHOLD (0.5)
-#define MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW 0
+#define MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW 5
 
 #define CLASS_AGNOSTIC_BB_TRACKING
 #define ASSIGN_BBID_ONLY_ONCE
@@ -83,10 +83,14 @@ typedef struct
 
 void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                 const int nTrackerInSlots,
-                tAnnInfo** ppDetectedBBs);
+                tAnnInfo** ppDetectedBBs,
+                tLanesInfo* pLanesInfo);
 tAnnInfo* make_copy_of_current_set(tAnnInfo* pDetectedBBs);
 int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs);
 int isWithinBB(tAnnInfo* pBBP, tAnnInfo* pBBD);
+void collect_analysis(tAnnInfo* pCurrFrameBBs, tAnnInfo* pPrevFrameBBs, tLanesInfo* pLanesInfo);
+tLane* laneWithThisBB(tLanesInfo* pLanesInfo, tAnnInfo* pBBNode);
+
 }
 
 static tAnnInfo* pCopyDetectedBBs;
@@ -247,15 +251,18 @@ int main( int argc, char** argv ){
 static Mat image_to_mat(tFrameInfo* pF, bool copy)
 {
     IplImage* ipl;
+    Mat mat;
 
     ipl = cvCreateImage(cvSize(pF->im.w,pF->im.h), IPL_DEPTH_8U, pF->im.c);
     ipl->widthStep = pF->widthStep;
     LOGV("width=%d\n", ipl->widthStep);
     ipl->imageData = (char*)pF->im.data;
-    return cvarrToMat(ipl, copy);
+    mat = cvarrToMat(ipl, copy);
+    cvReleaseImage(&ipl);
+    return mat;
 }
 
-int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInfo* pFTarg, tAnnInfo** appBoundingBoxesInOut)
+int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInfo* pFTarg, tAnnInfo** appBoundingBoxesInOut, tLanesInfo* pLanesInfo)
 {
     int ret = 0;
     Mat imgBaseM;
@@ -299,7 +306,7 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
     // for showing the speed
     double fps;
     String text;
-    char buffer [50];
+    char buffer [500];
 
     // set the default tracking algorithm
     String trackingAlg = TRACKING_ALGO;
@@ -505,8 +512,8 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
 #endif
         assess_iou_trackerBBs_detectedBBs(pTrackerBBs,
                     nInBBs,
-                    appBoundingBoxesInOut
-                    );
+                    appBoundingBoxesInOut,
+                    pLanesInfo);
         //*appBoundingBoxesInOut = pTrackerOutBBs;
 #endif
 #if 0
@@ -528,6 +535,42 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
         sprintf (buffer, "speed: %.0f fps", fps);
         text = buffer;
         putText(imgTargM, text, Point(20,20), FONT_HERSHEY_PLAIN, 1, Scalar(255,255,255));
+
+        if(pLanesInfo)
+        {
+                LOGV("DEBUGME\n");
+            tLane* pL = pLanesInfo->pLanes;
+                LOGV("DEBUGME\n");
+            while(pL)
+            {
+                LOGV("DEBUGME\n");
+                memset(buffer, 0 , sizeof(buffer));
+                LOGV("DEBUGME %p\n", pL);
+                LOGV("%d %f %lld\n", pL->nLaneId, pL->fAvgStayDuration, pL->nTotalVehiclesSoFar);
+                snprintf(buffer, 499, "lane:%d; (%f,%lld)", pL->nLaneId, pL->fAvgStayDuration, pL->nTotalVehiclesSoFar);
+                LOGV("DEBUGME\n");
+                text = buffer;
+                putText(imgTargM, buffer, Point(pL->pVs->x, pL->pVs->y), FONT_HERSHEY_PLAIN, 1, Scalar(0, 0, 0));
+                
+                tVertex* p1=pL->pVs;
+                tVertex* p2=p1->pNext;
+
+                for(int i=1 ; i < pL->nVs ; i++)
+                {
+                         line(imgTargM,Point(p1->x, p1->y),Point(p2->x, p2->y),Scalar(0,0,0));
+                         p1 = p1->pNext;
+                         p2=p1->pNext;
+              
+                } 
+                p2 = pL->pVs;
+                line(imgTargM,Point(p1->x, p1->y),Point(p2->x, p2->y),Scalar(0,0,0));
+
+
+                LOGV("DEBUGME\n");
+                pL = pL->pNext;
+            }
+                LOGV("DEBUGME\n");
+        }
   
         display_results(imgTargM, *appBoundingBoxesInOut);
         // show image with the tracked object
@@ -697,7 +740,8 @@ void assess_iou_trackedBBs_detectedBBs(tAnnInfo* pTrackedBBs,
 
 void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                 const int nTrackerInSlots,
-                tAnnInfo** ppDetectedBBs)
+                tAnnInfo** ppDetectedBBs,
+                tLanesInfo* pLanesInfo)
 {
     tAnnInfo* pTrackedBBs = NULL;
     if(!pTrackerBBs || !ppDetectedBBs)
@@ -717,6 +761,7 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
         pBBD = pBBD->pNext;
     }
 
+#if 0
     /** for all tracked BBs, find the corresponding BB in the detection result by
      * matching the IoU between tracked BBs and detected BBs 
      */
@@ -867,7 +912,41 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
             pBBD->fDirection = pBBD->x - pTrackerBBs[i].pBBTOrig->x > 0 ? 'L'  : 'R';
         }
 
+
+#ifdef SEE_TRACKING_ONLY
+        if(pTrackerBBs[i].bInDetectionList == 1)
+        {
+            pTrackerBBs[i].pBBT->pNext = pTrackedBBs;
+            pTrackedBBs = pTrackerBBs[i].pBBT;
+        }
+#endif
+        
+    }
+#endif
+
+    pBBD = pDetectedBBs;
+    while(pBBD)
+    {
+        for(int i = 0; i < nTrackerInSlots; i++)
+        {
+            //if(!pTrackerBBs[i].bInDetectionList)
+            {
+                if(isWithinBB(&pTrackerBBs[i].opticalFlowBB, pBBD))
+                {
+                    LOGV("found in final parse\n");
+                    pBBD->nBBId = pTrackerBBs[i].opticalFlowBB.nBBId;
+                    pTrackerBBs[i].bInDetectionList = pBBD->bBBIDAssigned = 1;
+                    /** */
+                    break;
+                }
+            }
+        }
+        pBBD = pBBD->pNext;
+    }
+
 #if 0
+    for(int i = 0; i < nTrackerInSlots; i++)
+    {
         if(pTrackerBBs[i].bInDetectionList == 0)
         {
             LOGV("not detected!!!!\n");
@@ -906,34 +985,8 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                 }
             }
         }
+     }
 #endif
-
-#ifdef SEE_TRACKING_ONLY
-        if(pTrackerBBs[i].bInDetectionList == 1)
-        {
-            pTrackerBBs[i].pBBT->pNext = pTrackedBBs;
-            pTrackedBBs = pTrackerBBs[i].pBBT;
-        }
-#endif
-        
-    }
-
-    pBBD = pDetectedBBs;
-    while(pBBD)
-    {
-        for(int i = 0; i < nTrackerInSlots; i++)
-        {
-            if(!pTrackerBBs[i].bInDetectionList)
-            {
-                if(isWithinBB(&pTrackerBBs[i].opticalFlowBB, pBBD))
-                {
-                    LOGV("found in final parse\n");
-                    pBBD->nBBId = pTrackerBBs[i].opticalFlowBB.nBBId;
-                }
-            }
-        }
-        pBBD = pBBD->pNext;
-    }
 
 #ifdef SEE_TRACKING_ONLY
     free_BBs(pDetectedBBs);
@@ -942,8 +995,12 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
     *ppDetectedBBs = pDetectedBBs;
 #endif
 
+    collect_analysis(*ppDetectedBBs, pCopyDetectedBBs, pLanesInfo);
+
     free_BBs(pCopyDetectedBBs);
     pCopyDetectedBBs = make_copy_of_current_set(*ppDetectedBBs);
+
+
     
 
 #if 0
@@ -963,8 +1020,8 @@ void display_results(Mat& imgTargM, tAnnInfo* pFinal)
         
         rectangle(imgTargM, Rect2d((double)pBB->x, (double)pBB->y, (double)pBB->w, (double)pBB->h), Scalar( 255, 0, 0 ), 2, 1 );
         char disp[50] = {0};
-        LOGV("disp: [%d(%d, %d):%s]\n", pBB->nBBId, pBB->x, pBB->y, pBB->pcClassName);
-        snprintf(disp, 50-1, "[%d(%d, %d):%s]", pBB->nBBId, pBB->x, pBB->y, pBB->pcClassName);
+        LOGV("disp: [%d(%d, %d):%s %d]\n", pBB->nBBId, pBB->x, pBB->y, pBB->pcClassName,pBB->nLaneId);
+        snprintf(disp, 50-1, "[%d(%d, %d):%s %d]", pBB->nBBId, pBB->x, pBB->y, pBB->pcClassName,pBB->nLaneId);
         putText(imgTargM, disp, Point(pBB->x,pBB->y), FONT_HERSHEY_PLAIN, 1, Scalar(255,255,255));
         pBB = pBB->pNext;
     }
@@ -1058,7 +1115,7 @@ int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs)
             disp = displacement_btw_BBs(pBBD, pBBIn);
             LOGV("disp is %f %s %d\n", disp, pBBIn->pcClassName, pBBD->nBBId);
             pBBIn->fDirection = pBBIn->x - pBBD->x > 0 ? 'L'  : 'R';
-            if(disp > 0.0 
+            if(disp >= 1.0 
                 //&& pBBIn->fDirection == pBBD->fDirection
                 )
                 return 1;
@@ -1069,7 +1126,7 @@ int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs)
     return 0;
 }
 
-class Polygons
+class Lanes
 {
      public:
      tLanesInfo* pLanesInfo;
@@ -1078,21 +1135,31 @@ class Polygons
      Mat ROI;
      sem_t sem;
      bool finished;
+     int count;
 
      public:
-     Polygons(Mat& img, Mat& roi)
+     Lanes(Mat& img, Mat& roi, tLanesInfo* apLanesInfo)
      {
         imgBaseM = img;
         ROI = roi;
         sem_init(&sem, 0, 0);
         finished = 0;
-        pLanesInfo = (tLanesInfo*)calloc(1, sizeof(tLanesInfo));
+        if(apLanesInfo)
+        {
+            pLanesInfo = apLanesInfo;
+            count = pLanesInfo->nLanes;
+        }
+        else
+        {
+            pLanesInfo = (tLanesInfo*)calloc(1, sizeof(tLanesInfo));
+            count=0;
+        }
      }
 };
 
 void mouseHandler(int event,int x,int y,int flags,void* userdata)
 {
-   Polygons* poly = (Polygons*)userdata;
+   Lanes* poly = (Lanes*)userdata;
 #if 1
    if(event==EVENT_RBUTTONDOWN){
       cout << "Right mouse button clicked at (" << x << ", " << y << ")" << endl;
@@ -1103,7 +1170,7 @@ void mouseHandler(int event,int x,int y,int flags,void* userdata)
       // Close polygon
       line(poly->imgBaseM,poly->vertices[poly->vertices.size()-1],poly->vertices[0],Scalar(0,0,0));
 
-      tPolygon* polygon = (tPolygon*)calloc(1, sizeof(tPolygon));
+      tLane* polygon = (tLane*)calloc(1, sizeof(tLane));
       for(int i = 0; i < poly->vertices.size(); i++)
       {
           tVertex* pV = (tVertex*)calloc(1, sizeof(tVertex));
@@ -1113,9 +1180,10 @@ void mouseHandler(int event,int x,int y,int flags,void* userdata)
           polygon->pVs = pV;
           polygon->nVs++;
       }
-      polygon->pNext = poly->pLanesInfo->pPolygons;
-      poly->pLanesInfo->pPolygons = polygon;
-      poly->pLanesInfo->nPolygons++;
+      polygon->nLaneId = ++poly->count;
+      polygon->pNext = poly->pLanesInfo->pLanes;
+      poly->pLanesInfo->pLanes = polygon;
+      poly->pLanesInfo->nLanes++;
       poly->vertices.clear();
 
       // Mask is black with white where our ROI is
@@ -1153,11 +1221,11 @@ void mouseHandler(int event,int x,int y,int flags,void* userdata)
 }
 
 
-tLanesInfo* getLaneInfo(tFrameInfo* pFrame)
+tLanesInfo* getLaneInfo(tFrameInfo* pFrame, tLanesInfo* pLanesInfo)
 {
     Mat imgBaseM = image_to_mat(pFrame, true);
     Mat roi;
-    Polygons polygons(imgBaseM, roi);
+    Lanes polygons(imgBaseM, roi, pLanesInfo);
     tLanesInfo* pPI = NULL;
     const char* winName = "draw lanes";
     cv::imshow(winName, imgBaseM);
@@ -1233,22 +1301,22 @@ bool doIntersect(tVertex p1, tVertex q1, tVertex p2, tVertex q2)
 }
 
 // Returns true if the point p lies inside the polygon[] with n vertices
-bool isInside(tPolygon* pPolygon, tVertex p)
+bool isInside(tLane* pLane, tVertex p)
 {
     // There must be at least 3 vertices in polygon[]
-    if (!pPolygon || !pPolygon->pVs || (pPolygon->nVs < 3))  return false;
+    if (!pLane || !pLane->pVs || (pLane->nVs < 3))  return false;
 
-    int n = pPolygon->nVs;
-    tVertex* pP = pPolygon->pVs;
+    int n = pLane->nVs;
+    tVertex* pP = pLane->pVs;
  
     // Create a point for line segment from p to infinite
     tVertex extreme = {INF, p.y};
  
     // Count intersections of the above line with sides of polygon
-    int count = 0, i = 0;
+    int count = 0;
     do
     {
-        tVertex nextV = pP->pNext ? *(pP->pNext) : *(pPolygon->pVs);
+        tVertex nextV = pP->pNext ? *(pP->pNext) : *(pLane->pVs);
         // Check if the line segment from 'p' to 'extreme' intersects
         // with the line segment from 'polygon[i]' to 'polygon[next]'
         if (doIntersect(*pP, nextV, p, extreme))
@@ -1262,13 +1330,13 @@ bool isInside(tPolygon* pPolygon, tVertex p)
             count++;
         }
         pP = pP->pNext;
-    } while (i != 0);
+    } while (pP);
  
     // Return true if count is odd, false otherwise
     return count&1;  // Same as (count%2 == 1)
 }
 
-int isWithinPolygon(tPolygon* pLane, tVertex* pVertex)
+int isWithinLane(tLane* pLane, tVertex* pVertex)
 {
     if(!pLane || !pVertex)
         return 0;
@@ -1284,4 +1352,112 @@ int isWithinBB(tAnnInfo* pBBP, tAnnInfo* pBBD)
                           )
                 return 1;
         return 0;
+}
+
+
+void collect_analysis(tAnnInfo* pCurrFrameBBs, tAnnInfo* pPrevFrameBBs, tLanesInfo* pLanesInfo)
+{
+    tAnnInfo* pBBNode = NULL;
+    tAnnInfo* pCurrBB = NULL;
+    if(!pCurrFrameBBs || !pPrevFrameBBs || !pLanesInfo)
+        return;
+
+    pBBNode = pPrevFrameBBs;
+    while(pBBNode)
+    {
+
+        if((pCurrBB = getBBById(pCurrFrameBBs, pBBNode->nBBId)))
+        {
+            /** an object is tracked in the curr frame;
+             * avg-wait-time
+             */
+            /** assign prev BB's basic detail here - if its not already populated */
+            tLane* pLPrev = NULL;
+            pLPrev = laneWithThisBB(pLanesInfo, pBBNode);
+            if(pBBNode->nLaneId == INVALID_LANE_ID)
+            {
+                pBBNode->fStartTS = pBBNode->fCurrentFrameTimeStamp;
+                pBBNode->nLaneId = pLPrev ? pLPrev->nLaneId : INVALID_LANE_ID;
+            }
+            tLane* pLCurr = laneWithThisBB(pLanesInfo, pCurrBB);
+            {
+                pCurrBB->nLaneId = pLCurr ? pLCurr->nLaneId : INVALID_LANE_ID;
+                pCurrBB->nLaneHistory = pBBNode->nLaneHistory;
+                if(pBBNode->nLaneId != pCurrBB->nLaneId)
+                {
+                    pCurrBB->nLaneHistory = pBBNode->nLaneId;
+                    if(pCurrBB->nLaneId != INVALID_LANE_ID
+                       && pBBNode->nLaneHistory != INVALID_LANE_ID)
+                    {
+                        LOGV("we have route flux from lane %d to %d %d\n", pBBNode->nLaneHistory, pCurrBB->nLaneId, pCurrBB->nClassId);
+                        LOGV("deref ppRouteTrafficInfo[]=%p\n", pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory]);
+                        LOGV("deref ppRouteTrafficInfo[][]=%p\n", &pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nClassId]);
+                        LOGV("deref ppRouteTrafficInfo[][]=%p\n", pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nClassId].pnVehicleCount);
+                        LOGV("deref ppRouteTrafficInfo[][]=%lld\n", pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nClassId].pnVehicleCount[pCurrBB->nClassId]);
+                        (pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nLaneId].pnVehicleCount[pCurrBB->nClassId])++;
+                        LOGV("DEBUGME\n");
+                    }
+                    if(pLPrev)
+                        pLPrev->pnVehicleCount[pCurrBB->nClassId]++; 
+                    /** object now exited the lane */
+                    double fDurationOfStayInThisLane = pCurrBB->fCurrentFrameTimeStamp - pCurrBB->fStartTS;
+                    if(pLPrev)
+                    {
+                        pLPrev->fTotalStayDuration += fDurationOfStayInThisLane;
+                        pCurrBB->fStartTS = pCurrBB->fCurrentFrameTimeStamp;
+                        pLPrev->nTotalVehiclesSoFar = 0;
+                        for(int i = 0; i < pLPrev->nTypes; i++)
+                            pLPrev->nTotalVehiclesSoFar += pLPrev->pnVehicleCount[i];
+                        pLPrev->fAvgStayDuration = pLPrev->nTotalVehiclesSoFar ? pLPrev->fTotalStayDuration / (pLPrev->nTotalVehiclesSoFar) : 0;
+                        LOGV("lane %d; fAvgStayDuration=%f nTotalVehiclesSoFar=%lld\n", pLPrev->nLaneId, pLPrev->fAvgStayDuration, pLPrev->nTotalVehiclesSoFar);
+                    }
+                }
+                else
+                {
+                    pCurrBB->fStartTS = pBBNode->fStartTS;
+                }
+            }
+        }
+        else
+        {
+            /** the object went out of scene */
+            /** counting vehicle types: */
+            /** check which lane the vehicle belonged to, and increment corresponding count */
+            tLane* pL;
+            if(pBBNode->fStartTS /**< count this only if we tracked same obj over atleast 2 frames */
+                && (pL = laneWithThisBB(pLanesInfo, pBBNode)))
+            {
+            }
+            else
+            {
+                LOGV("we couldn't identify lane; \n");
+            }
+        }
+        pBBNode = pBBNode->pNext;
+    }
+
+    return;
+}
+
+tLane* laneWithThisBB(tLanesInfo* pLanesInfo, tAnnInfo* pBBNode)
+{
+    tLane* pL;
+
+    if(!pLanesInfo || !pBBNode)
+        return NULL;
+
+    pL = pLanesInfo->pLanes;
+    while(pL)
+    {
+        tVertex nTmp = {0};
+        nTmp.x = pBBNode->x;
+        nTmp.y = pBBNode->y;
+        nTmp.x += (pBBNode->w/2);
+        nTmp.y += (int)((pBBNode->h * 3.0) / 4);
+        if(isWithinLane(pL, &nTmp))
+            return pL;
+        pL = pL->pNext;
+    }
+
+    return NULL;
 }

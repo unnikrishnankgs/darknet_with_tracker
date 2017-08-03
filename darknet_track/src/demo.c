@@ -202,6 +202,7 @@ void evaluate_detections(tFrame* pFrame, image im, int num, float thresh, box *b
             annInfo.w = (int)(right - left);
             annInfo.h = (int)(bot - top);
             annInfo.pcClassName = (char*)calloc(1, strlen(names[class_]) + 1);
+            annInfo.nClassId = class_;
             annInfo.nBBId = pDetector->nBBCount++; /**< the unique object ID assigned to the BB initially by detector; used in IMPURE_CNN mode */
             strcpy(annInfo.pcClassName, names[class_]);
             if(pDetector->pDetectorModel->isVideo)
@@ -413,9 +414,10 @@ void free_frame(tDetector* pDetector, tFrame* apFrame)
             free(apFrame->probs[i]);
         free(apFrame->probs);
     }
-    //free_image(apFrame->buff_letter);
+    free_image(apFrame->buff_letter);
     free_BBs(apFrame->pBBs);
     free_image(apFrame->frameInfoWithCpy.im);
+    cvReleaseImage(&apFrame->ipl);
     free(apFrame);
 }
 
@@ -816,7 +818,7 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
             if(pDetector->pFramesHash[0])
             {
                 nFIdxToReadInto = 1;
-                nL = MAX_FRAMES_TO_HASH+1; /**< hash in  */
+                nL = MAX_FRAMES_TO_HASH; /**< hash in  */
             }
             else
             {
@@ -862,10 +864,10 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                         cJSON* pJSONPolys = NULL;
                         {
                             char* lane_info = calloc(1, 10240);
-                            int i = 0;
-                            while(fread(&lane_info[i], sizeof(char), 1, pFile))
+                            int j = 0;
+                            while(fread(&lane_info[j], sizeof(char), 1, pFile))
                             {
-                                i++;
+                                j++;
                             }
                             LOGV("lane_info is [%s]\n", lane_info);
                             pJSONPolys = cJSON_Parse(lane_info);
@@ -874,19 +876,32 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                         int nJSONPolys = 0;
                         if(pJSONPolys && (nJSONPolys = cJSON_GetArraySize(pJSONPolys)))
                         {
+                            LOGV("DEBUGME\n");
                             pDetector->pLanesInfo = (tLanesInfo*)calloc(1, sizeof(tLanesInfo));
+                            LOGV("DEBUGME\n");
                             for(int j = 0; j < nJSONPolys; j++)
                             {
+                                LOGV("DEBUGME\n");
                                 cJSON* pJSONPoly = cJSON_GetArrayItem(pJSONPolys, j);
                                 int nJSONVs = 0;
-                                if(pJSONPoly && (nJSONVs = cJSON_GetArraySize(pJSONPoly)))
+                                if(pJSONPoly)
                                 {
-                                    tPolygon* pP = (tPolygon*)calloc(1, sizeof(tPolygon));
-                                    pP->nLaneId = j;
+                                    LOGV("DEBUGME\n");
+                                    cJSON* pJSONLId = cJSON_GetObjectItem(pJSONPoly, "laneid");
+                                    cJSON* pJSONLRoute = cJSON_GetObjectItem(pJSONPoly, "route");
+                                    cJSON* pJSONVArr = cJSON_GetObjectItem(pJSONPoly, "vertices");
+                                    nJSONVs = cJSON_GetArraySize(pJSONVArr);
+                                    tLane* pP = (tLane*)calloc(1, sizeof(tLane));
+                                    pP->nLaneId = pJSONLId->valueint;
+                                    LOGV("DEBUGME\n");
+                                    pP->pcRoute = (char*)calloc(1, strlen(pJSONLRoute->valuestring) + 1);
+                                    strcpy(pP->pcRoute, pJSONLRoute->valuestring);
+                                    LOGV("DEBUGME\n");
                                     for(int k = 0; k < nJSONVs; k++)
                                     {
+                                        LOGV("DEBUGME\n");
                                         tVertex* pV = (tVertex*)calloc(1, sizeof(tVertex));
-                                        cJSON* pJVertex = cJSON_GetArrayItem(pJSONPoly, k);
+                                        cJSON* pJVertex = cJSON_GetArrayItem(pJSONVArr, k);
                                         cJSON* pJX = cJSON_GetObjectItem(pJVertex, "x");
                                         cJSON* pJY = cJSON_GetObjectItem(pJVertex, "y");
                                         LOGV("point is (%d, %d)\n", pJX->valueint, pJY->valueint);
@@ -895,26 +910,40 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                                         pP->nVs++;
                                         pV->pNext = pP->pVs;
                                         pP->pVs = pV;
+                                    LOGV("DEBUGME\n");
                                     }
-                                    pP->pNext = pDetector->pLanesInfo->pPolygons;
-                                    pDetector->pLanesInfo->pPolygons = pP;
-                                    pDetector->pLanesInfo->nPolygons++;
+                                    LOGV("DEBUGME\n");
+                                    pP->pNext = pDetector->pLanesInfo->pLanes;
+                                    pDetector->pLanesInfo->pLanes = pP;
+                                    pDetector->pLanesInfo->nLanes++;
                                 }
                             }
+                                    LOGV("DEBUGME\n");
                         }
                         cJSON_free(pJSONPolys);
                     }
+                    if(pFile)
+                        fclose(pFile);
+#if 0
+                    pDetector->pLanesInfo = getLaneInfo(&pDetector->pFramesHash[0]->frameInfoWithCpy, pDetector->pLanesInfo);
+#endif
                     if(!pDetector->pLanesInfo) 
                     {
                         /** ask user to provide the lane info */
-                        pDetector->pLanesInfo = getLaneInfo(&pDetector->pFramesHash[0]->frameInfoWithCpy);
+                        pDetector->pLanesInfo = getLaneInfo(&pDetector->pFramesHash[0]->frameInfoWithCpy, NULL);
                         LOGV("polygons info=%p\n", pDetector->pLanesInfo);
                         cJSON* pJSONPolys = cJSON_CreateArray();
                         if(pDetector->pLanesInfo)
                         {
-                            tPolygon* pP = pDetector->pLanesInfo->pPolygons;
+                            tLane* pP = pDetector->pLanesInfo->pLanes;
                             while(pP)
                             {
+                                cJSON* pJId = cJSON_CreateNumber(pP->nLaneId);
+                                cJSON* pJRoute = cJSON_CreateString("default-route");
+                                cJSON* pJLaneInfo = cJSON_CreateObject();
+                                cJSON_AddItemToObject(pJLaneInfo, "laneid", pJId);
+                                cJSON_AddItemToObject(pJLaneInfo, "route", pJRoute);
+
                                 cJSON* pJSONPoly = cJSON_CreateArray();
                                 /** polygon: list of vertices in order */
                                 tVertex* pV = pP->pVs;
@@ -928,7 +957,8 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                                     cJSON_AddItemToArray(pJSONPoly, pJVertex);
                                     pV = pV->pNext;
                                 }
-                                cJSON_AddItemToArray(pJSONPolys, pJSONPoly);
+                                cJSON_AddItemToObject(pJLaneInfo, "vertices", pJSONPoly);
+                                cJSON_AddItemToArray(pJSONPolys, pJLaneInfo);
                                 pP = pP->pNext;
                             }
                         }
@@ -938,6 +968,26 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                         fprintf(pFile, "%s", cJSON_Print(pJSONPolys));
                         fclose(pFile);
                         cJSON_free(pJSONPolys);
+                    }
+                    /** populate pLanesInfo with class detail */
+                    tLane* pLane = pDetector->pLanesInfo->pLanes;
+                    while(pLane)
+                    {
+                        LOGV("number of demo_classes=%d\n", pDetector->demo_classes);
+                        pLane->pnVehicleCount = (long long*)calloc(1, sizeof(long long) * (pDetector->demo_classes+1));
+                        pLane->nTypes = pDetector->demo_classes;
+                        pLane = pLane->pNext;
+                    }
+                    LOGV("number of lanes=%d %d\n", pDetector->pLanesInfo->nLanes, pDetector->demo_classes);
+                    pDetector->pLanesInfo->ppRouteTrafficInfo = (tRouteTrafficInfo**)calloc(pDetector->pLanesInfo->nLanes+1, sizeof(tRouteTrafficInfo*));
+                    for(int j = 0; j < pDetector->pLanesInfo->nLanes+1; j++)
+                    {
+                        pDetector->pLanesInfo->ppRouteTrafficInfo[j] = (tRouteTrafficInfo*)calloc(pDetector->pLanesInfo->nLanes+1, sizeof(tRouteTrafficInfo));
+                        for(int k = 0; k < pDetector->pLanesInfo->nLanes+1; k++)
+                        {
+                            pDetector->pLanesInfo->ppRouteTrafficInfo[j][k].pnVehicleCount = (long long*)calloc(1, sizeof(long long) * (pDetector->demo_classes+1));
+                            pDetector->pLanesInfo->ppRouteTrafficInfo[j][k].nTypes = pDetector->demo_classes;
+                        }
                     }
                     display_lanes_info(pDetector->pLanesInfo);
                     detect_object_for_frame(pDetector, pDetector->pFramesHash[0], count);
@@ -963,8 +1013,8 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                 track_bb_in_frame(pDetector->pFramesHash[0]->pBBs, 
                     &pDetector->pFramesHash[0]->frameInfoWithCpy, 
                     &pDetector->pFramesHash[nL-1]->frameInfoWithCpy,
-                    &pDetector->pFramesHash[nL-1]->pBBs
-                    );
+                    &pDetector->pFramesHash[nL-1]->pBBs,
+                    pDetector->pLanesInfo);
                 /** interpolate all the BBs for frames in between 0 and (nL-1) */
                 interpolate_bbs_btw_frames(pDetector, pDetector->pFramesHash, 0, nL-1);
                 LOGV("BBs tracked=%p\n", pDetector->pFramesHash[nL-1]->pBBs);
@@ -980,8 +1030,10 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                 (pDetector->fEndTime - pDetector->fStartTime) * 1000.0,
                 (nL * 1.0) / (pDetector->fEndTime - pDetector->fStartTime));
             #if 1
+            LOGV("i=%d to %d\n", nFIdxToReadInto, nL);
             for(int i = nFIdxToReadInto; i < nL; i++)
             {
+                LOGV("DEBUGME %p\n", pDetector->pFramesHash);
                 if(pDetector->pFramesHash[i])
                 {
                     LOGV("firing CB for frame %d BBs=%p\n", i, pDetector->pFramesHash[i]->pBBs);
@@ -989,10 +1041,12 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                     if((i == (nL-1)) && !pDetector->demo_done)
                     {
                         LOGV("save the %dth hash in 0th for next iteration %p %p\n", i, pDetector->pFramesHash[i], pDetector->pFramesHash[i]->pBBs);
+                        free_frame(pDetector, pDetector->pFramesHash[0]);
                         pDetector->pFramesHash[0] = pDetector->pFramesHash[i];
                         pDetector->pFramesHash[i] = NULL;
                         break;
                     }
+                    LOGV("free_frame\n");
                     free_frame(pDetector, pDetector->pFramesHash[i]);
                     pDetector->pFramesHash[i] = NULL;
                 }
@@ -1020,6 +1074,7 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
     LOGD("DEBUGME\n");
     pDetector->cap = NULL;
 }
+
 
 void demo(char *cfgfile, char *weightfile, float thresh, int cam_index, const char *filename, char **names, int classes, int delay, char *prefix, int avg_frames, float hier, int w, int h, int frames, int fullscreen)
 {

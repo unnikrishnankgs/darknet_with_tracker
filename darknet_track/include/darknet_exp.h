@@ -10,7 +10,11 @@ struct AnnInfo
      int w;
      int h;
      char* pcClassName;
+     int nClassId;
+     int nLaneId; /**< currently darknet fetch the ROI polygons when you start and use them to track new BBs */
+     int nLaneHistory;
      double fCurrentFrameTimeStamp;
+     double fStartTS;
      int nVideoId;
      double prob;
      int nBBId;
