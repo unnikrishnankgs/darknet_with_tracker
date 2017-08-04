@@ -855,6 +855,7 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                         /** cleanup any saved hash */
                         if(pDetector->pFramesHash[0])
                             free_frame(pDetector, pDetector->pFramesHash[0]);
+                        dump_lane_info(pDetector->pLanesInfo);
                         return;
                     }
                     nL = i - 1;
@@ -1081,7 +1082,7 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
 
 
         /** dump lane info as and when needed */
-        if((get_wall_time() - prevDumpTime >= (10.0 * 60 * 30))
+        if((get_wall_time() - prevDumpTime >= (1.0 * 60 * 30))
             || pDetector->demo_done)
         {
             prevDumpTime = get_wall_time();
