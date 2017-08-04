@@ -910,8 +910,13 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                                         cJSON* pJX = cJSON_GetObjectItem(pJVertex, "x");
                                         cJSON* pJY = cJSON_GetObjectItem(pJVertex, "y");
                                         LOGV("point is (%d, %d)\n", pJX->valueint, pJY->valueint);
+#if 0
                                         pV->x = pJX->valueint;
                                         pV->y = pJY->valueint;
+#else
+                                        pV->x = (int)(((pJX->valueint * 1.0) /1920.0) * 854.0);
+                                        pV->y = (int)(((pJY->valueint * 1.0) /1080.0) * 480.0);
+#endif
                                         pP->nVs++;
                                         pV->pNext = pP->pVs;
                                         pP->pVs = pV;
@@ -1298,9 +1303,9 @@ void dump_lane_info(tLanesInfo* pLanesInfo)
 {
     char filename[500] = {0};
     char cmd[500] = {0};
-    snprintf(cmd, 500, "mkdir /data/team1_darknet/%s", folder_name);
+    snprintf(cmd, 500, "mkdir -p data/team1_darknet/%s", folder_name);
     system(cmd);
-    snprintf(filename, 500, "/data/team1_darknet/%s/traffic_pattern_%f", folder_name, get_wall_time());
+    snprintf(filename, 500, "data/team1_darknet/%s/traffic_pattern_%f", folder_name, get_wall_time());
     FILE* fp = fopen(filename, "w");
     if(pLanesInfo && fp)
     {   

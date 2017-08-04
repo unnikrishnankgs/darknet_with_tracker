@@ -41,7 +41,7 @@
 #define GREEN   "\033[32m"      /* Green */
 
 //#define USE_MULTI_TRACKER
-//#define DISPLAY_RESULTS
+#define DISPLAY_RESULTS
 #define MAX_TRACK_ITERATIONS 1
 
 #define TRACKING_ALGO "MEDIAN_FLOW"
@@ -49,8 +49,8 @@
 #define USE_CV_TRACKING
 #define OPTICAL_FLOW
 #define OPTICAL_FLOW_APPROXIMATION
-#define OPT_FLOW_WINSIZE_W 250
-#define OPT_FLOW_WINSIZE_H 250
+#define OPT_FLOW_WINSIZE_W 50
+#define OPT_FLOW_WINSIZE_H 50
 
 #define ABS_DIFF(a, b) ((a) > (b)) ? ((a)-(b)) : ((b)-(a))
 #define GOOD_IOU_THRESHOLD (0.5)
@@ -1391,9 +1391,9 @@ void collect_analysis(tAnnInfo* pCurrFrameBBs, tAnnInfo* pPrevFrameBBs, tLanesIn
                     {
                         LOGV("we have route flux from lane %d to %d %d\n", pBBNode->nLaneHistory, pCurrBB->nLaneId, pCurrBB->nClassId);
                         LOGV("deref ppRouteTrafficInfo[]=%p\n", pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory]);
-                        LOGV("deref ppRouteTrafficInfo[][]=%p\n", &pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nClassId]);
-                        LOGV("deref ppRouteTrafficInfo[][]=%p\n", pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nClassId].pnVehicleCount);
-                        LOGV("deref ppRouteTrafficInfo[][]=%lld\n", pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nClassId].pnVehicleCount[pCurrBB->nClassId]);
+                        LOGV("deref ppRouteTrafficInfo[][]=%p\n", &pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nLaneId]);
+                        LOGV("deref ppRouteTrafficInfo[][]=%p\n", pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nLaneId].pnVehicleCount);
+                        LOGV("deref ppRouteTrafficInfo[][]=%lld\n", pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nLaneId].pnVehicleCount[pCurrBB->nClassId]);
                         (pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nLaneId].pnVehicleCount[pCurrBB->nClassId])++;
                         LOGV("DEBUGME\n");
                     }
