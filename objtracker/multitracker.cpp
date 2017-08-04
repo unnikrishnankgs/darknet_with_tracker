@@ -1355,6 +1355,26 @@ int isWithinBB(tAnnInfo* pBBP, tAnnInfo* pBBD)
 }
 
 
+typedef struct
+{
+    int from;
+    int to;
+}tViolation;
+
+tViolation gViolations[] = {{15, 4}};
+
+int isViolation(int from, int to)
+{
+    for(int i = 0; i < sizeof(gViolations); i++)
+    {
+        if(from == gViolations[i].from
+           && to == gViolations[i].to)
+            return 1;
+    }
+    return 0;
+}
+
+
 void collect_analysis(tAnnInfo* pCurrFrameBBs, tAnnInfo* pPrevFrameBBs, tLanesInfo* pLanesInfo)
 {
     tAnnInfo* pBBNode = NULL;
@@ -1396,6 +1416,10 @@ void collect_analysis(tAnnInfo* pCurrFrameBBs, tAnnInfo* pPrevFrameBBs, tLanesIn
                         LOGV("deref ppRouteTrafficInfo[][]=%lld\n", pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nLaneId].pnVehicleCount[pCurrBB->nClassId]);
                         (pLanesInfo->ppRouteTrafficInfo[pBBNode->nLaneHistory][pCurrBB->nLaneId].pnVehicleCount[pCurrBB->nClassId])++;
                         LOGV("DEBUGME\n");
+                        if(isViolation(pBBNode->nLaneHistory, pCurrBB->nLaneId))
+                        {
+                            LOGV("violation @ %f; BBID=%d type=%s\n", pCurrBB->fCurrentFrameTimeStamp, pCurrBB->nBBId, pCurrBB->pcClassName);
+                        }
                     }
                     if(pLPrev)
                         pLPrev->pnVehicleCount[pCurrBB->nClassId]++; 
