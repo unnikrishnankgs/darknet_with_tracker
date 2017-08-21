@@ -17,7 +17,7 @@
 
 /** { ISVA */
 //#define ENABLE_VIDEO_FILE_READ_AT_TAR_FPS
-//#define DISPLAY_RESULS
+#define DISPLAY_RESULS
 
 /** shall track BBs in the same frame */
 //#define TEST_TRACKING
@@ -31,11 +31,14 @@
  * NOTE: works only when the input is a video or live camera feed
  */
 #define IMPURE_CNN
-#define GOOD_IOU_THRESHOLD (0.5)
 
-//#define DEBUG
+#define DEBUG
 #define VERBOSE
 #include "debug.h"
+
+//#define IMAGE_LIST
+//#define WRITE_PRED_FOR_MOTA
+//#define OVERRIDE_CNN
 
 /** } ISVA */
 
@@ -82,10 +85,12 @@ typedef struct
     double countFrame;
     double totalFramesInVid;
     tLanesInfo* pLanesInfo;
+    int gIdx;
 }tDetector;
 
 struct Frame
 {
+    int nFrameId;
     image buff;
     double buff_ts;
     image buff_letter;
@@ -103,6 +108,11 @@ static void test_detector_on_img(tDetector* pDetector, char *datacfg, char *cfgf
 void *display_in_thread(void *ptr);
 void free_frame(tDetector* pDetector, tFrame* apFrame);
 void dump_lane_info(tLanesInfo* pLanesInfo);
+/**
+ * @param file [IN] the abs path to detection results MOT .txt file
+ * @return 0 if success, else 1
+ */
+tFrame* read_MOT_detection(tDetector* pDetector, char *file);
 
 void init_globals(tDetector* pDetector)
 {
@@ -338,6 +348,11 @@ tFrame* get_frame_from_cap(tDetector* pDetector, tFrame* apReuseFrame, double se
         }
         else
         {
+#ifdef IMAGE_LIST
+            char filename[1024] = {0};
+            snprintf(filename, 1024, "/media/unnikrishnan/Qi/2DMOT2015/train/Venice-2/img1/%06d.jpg", ++pDetector->gIdx);
+            pDetector->cap = cvCaptureFromFile(filename);
+#endif /**< IMAGE_LIST */
             buff_ts = cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_POS_MSEC);
         }
         image buff = get_image_from_stream_sj(pDetector->cap, &frameInfoWithCpy);
@@ -355,6 +370,7 @@ tFrame* get_frame_from_cap(tDetector* pDetector, tFrame* apReuseFrame, double se
         }
       
         pFrame = (tFrame*)calloc(1, sizeof(tFrame));
+        pFrame->nFrameId = pDetector->gIdx;
         pFrame->frameInfoWithCpy = frameInfoWithCpy;
         pFrame->buff = buff;
         LOGD("DEBUGME\n");
@@ -480,21 +496,56 @@ void *detect_loop(void *ptr)
 
 int initOnce =0;
 
+int isBBIdDuplicate(tAnnInfo* pBBs, tAnnInfo* pBB)
+{
+     tAnnInfo* pBBTmp = pBBs; 
+     while(pBBTmp)
+     {
+        LOGV("%d == %d %p %p\n", pBBTmp->nBBId, pBB->nBBId, pBBTmp, pBB);
+        if(pBBTmp == pBB)
+            break;
+        if(pBBTmp->nBBId == pBB->nBBId)
+            return 1;
+        pBBTmp = pBBTmp->pNext;
+     }
+     return 0;
+}
+
 void fire_bb_callbacks_for_frame(tDetector* pDetector, tFrame* pFrame)
 {
     tAnnInfo* pBB;
 
     if(!pDetector || !pDetector->pDetectorModel || !pFrame 
-        || !pFrame->pBBs || !pDetector->pDetectorModel->pfnRaiseAnnCb)
+        || !pFrame->pBBs)
         return;
 
     LOGV("DEBUGME %p\n", pFrame->pBBs);
     pBB = pFrame->pBBs;    
     while(pBB)
     {
-        LOGV("obj (%d, %d) (%d, %d) [%s] %f\n", pBB->x, pBB->y, pBB->w, pBB->h,
-                pBB->pcClassName, pBB->fCurrentFrameTimeStamp);
-        pDetector->pDetectorModel->pfnRaiseAnnCb(*pBB);
+        LOGV("obj (%d, %d) (%d, %d) [%s] %f; FID=%d ObjID=%d\n", pBB->x, pBB->y, pBB->w, pBB->h,
+                pBB->pcClassName, pBB->fCurrentFrameTimeStamp, pFrame->nFrameId, pBB->nBBId);
+        if(pDetector->pDetectorModel->pfnRaiseAnnCb)
+            pDetector->pDetectorModel->pfnRaiseAnnCb(*pBB);
+#ifdef WRITE_PRED_FOR_MOTA
+        /** check if Object-ID is a duplicate ?;
+         * ignore duplicates */
+        if(isBBIdDuplicate(pFrame->pBBs, pBB))
+        {
+            /** ignore */
+            LOGV("duplicate\n");
+        }
+        else
+        {
+            /** use fprintf */
+            FILE * fp;
+            fp = fopen("/home/unnikrishnan/Venice-2.txt", "a");
+            LOGV("fp=%p\n", fp);
+            fprintf(fp, "%d, %d, %d, %d, %d, %d, -1, -1, -1, -1\n", pFrame->nFrameId, pBB->nBBId, pBB->x, pBB->y, pBB->w, pBB->h);
+            fclose(fp);
+        }
+#endif /**< WRITE_PRED_FOR_MOTA */
+
         pBB = pBB->pNext;
     }
     LOGV("DEBUGME\n");
@@ -777,6 +828,34 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
 
     //cvSetCaptureProperty(pDetector->cap, CV_CAP_PROP_FPS, (double)pDetector->nTargetFps);
 
+#ifdef OVERRIDE_CNN
+    LOGV("going to read detection txt file\n");
+    char* det_file_name =  "/media/unnikrishnan/Qi/2DMOT2015/train/Venice-2/det/det.txt";
+    tFrame* pDetectionOnFramesResults = read_MOT_detection(pDetector, det_file_name);
+    if(!pDetectionOnFramesResults)
+    {
+        LOGE("failed to read detection results from file [%s]\n", det_file_name);
+    }
+    else
+    {
+        tFrame* pFrameTmp = pDetectionOnFramesResults;
+        LOGV("ALL INFO WE READ FROM DET.TXT\n");
+        while(pFrameTmp)
+        {
+            tAnnInfo* pBB = pFrameTmp->pBBs;
+            LOGV("FrameID:%d\n", pFrameTmp->nFrameId);
+            while(pBB)
+            {
+                LOGV("(%d, %d):(%d, %d) [%f]; fCurrentFrameTimeStamp=%f pcClassName=[%s]\n", 
+                    pBB->x, pBB->y, pBB->w, pBB->h, pBB->prob, pBB->fCurrentFrameTimeStamp, pBB->pcClassName);
+                pBB = pBB->pNext;
+            }
+            pFrameTmp = pFrameTmp->pNext;
+        }
+    }
+    tFrame* pFrameTmp = pDetectionOnFramesResults;
+#endif
+
     LOGD("DEBUGME %d\n", pDetector->demo_done);
     while(!pDetector->demo_done){
         LOGD("pDetector->demo_done=%d count=%d prefix=%s pDetector->nSkipFramesCnt=%d\n", pDetector->demo_done, count, prefix, pDetector->nSkipFramesCnt);
@@ -1003,7 +1082,12 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                     pDetector->pLanesInfo->names = pDetector->demo_names;
                     pDetector->pLanesInfo->nTypes = pDetector->demo_classes;
                     display_lanes_info(pDetector->pLanesInfo);
+                    #ifdef OVERRIDE_CNN
+                    pDetector->pFramesHash[0]->pBBs = pFrameTmp->pBBs;
+                    pFrameTmp = pFrameTmp->pNext;
+                    #else
                     detect_object_for_frame(pDetector, pDetector->pFramesHash[0], count);
+                    #endif
                 }
                 pDetector->countFrame++;
                 /** delete prev frame; we dont need it; this exercise is alt to seek */
@@ -1017,12 +1101,19 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
             LOGV("[except for 1st print] seek took %fms; means read is @ %ffps\n", 
                 (pDetector->fEndTime - pDetector->fStartTime) * 1000.0,
                 (nL * 1.0) / (pDetector->fEndTime - pDetector->fStartTime));
-            
+           
+             
             /** use the BBs at pDetector->pFramesHash[0]->pBBs and fetch the tracked replicas of them in
              * pDetector->pFramesHash[MAX_FRAMES_TO_HASH-1] */
             if(pDetector->pFramesHash[0] && pDetector->pFramesHash[nL-1])
             {
+                #ifdef OVERRIDE_CNN
+                pDetector->pFramesHash[nL-1]->pBBs = pFrameTmp->pBBs;
+                pFrameTmp = pFrameTmp->pNext;
+                #else
                 detect_object_for_frame(pDetector, pDetector->pFramesHash[nL-1], count);
+                #endif
+                
                 track_bb_in_frame(pDetector->pFramesHash[0]->pBBs, 
                     &pDetector->pFramesHash[0]->frameInfoWithCpy, 
                     &pDetector->pFramesHash[nL-1]->frameInfoWithCpy,
@@ -1097,6 +1188,104 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
     pDetector->cap = NULL;
 }
 
+tFrame* read_MOT_detection(tDetector* pDetector, char *file)
+{
+    FILE* fp;
+    char * line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    tFrame* pFramesRead = NULL; /**< detection results for all the frames; linked-list of frames */
+    tFrame* pFrameTmp = NULL;
+    tFrame* pFramePrev = NULL;
+    int nLastFrameId = 0;
+
+    fp = fopen(file, "r");
+    if (fp == NULL)
+    {
+        //exit(EXIT_FAILURE);
+        LOGE("file read failed\n");
+        return NULL;
+    }
+
+    while ((read = getline(&line, &len, fp)) != -1){
+        char *ch;
+        int loop = 0;
+        tAnnInfo* pBB = NULL;
+        ch = strtok(line, ",");
+
+        pBB = (tAnnInfo*)calloc(1, sizeof(tAnnInfo));
+        while(ch)
+        {
+            LOGV("tok=[%s]\n", ch);
+            /** let us read the frame ID */
+            int nFrameId = 0;
+            switch(loop)
+            {
+                case 0:
+                    nFrameId = atoi(ch);
+                    LOGV("last frame ID we read=%d now=%d\n", nLastFrameId, nFrameId);
+                    if(nLastFrameId != nFrameId)
+                    {
+                        /** we read a new frame ID */
+                        nLastFrameId = nFrameId;
+                        pFramePrev = pFrameTmp;
+                        pFrameTmp = (tFrame*)calloc(1, sizeof(tFrame));
+                        pFrameTmp->nFrameId = nFrameId;
+                        #if 0
+                        pFrameTmp->pNext = pFramesRead;
+                        pFramesRead = pFrameTmp;
+                        #endif
+                        /** append to list as we need in ascending order of nFrameId */
+                        if(pFramePrev)
+                            pFramePrev->pNext = pFrameTmp;
+                        else
+                            pFramesRead = pFrameTmp;
+                    }
+                break;
+
+                case 1: /** object ID == -1 */
+                break;
+
+                case 2: /**< x */
+                    pBB->x = atoi(ch);
+                break;
+
+                case 3: /**< y */
+                    pBB->y = atoi(ch);
+                break;
+
+                case 4: /**< w */
+                    pBB->w = (int)(atof(ch));
+                break;
+
+                case 5: /**< h */
+                    pBB->h = (int)(atof(ch));
+                break;
+
+                case 6: /**< conf/prob */
+                    pBB->prob = atof(ch);
+                break;
+            }
+            ch = strtok(NULL, ",");
+            loop++;
+        }
+        pBB->fCurrentFrameTimeStamp = (double)(pFrameTmp->nFrameId);
+        pBB->nBBId = pDetector->nBBCount++; /**< the unique object ID assigned to the BB initially by detector; used in IMPURE_CNN mode */
+        char* pcClassType = "pedestrian";
+        pBB->pcClassName = (char*)malloc(strlen(pcClassType) + 1);
+        strcpy(pBB->pcClassName, pcClassType);
+        /** we have 1 BB ready; prepend to the list of BBs */
+        pBB->pNext = pFrameTmp->pBBs;
+        pFrameTmp->pBBs = pBB;
+    }         
+
+    /** we have a list of tFrame* 's 
+     * list of frame - each tFrame has a list of BBs at tFrame->pBBs
+     */
+
+
+    return pFramesRead;
+}
 
 void demo(char *cfgfile, char *weightfile, float thresh, int cam_index, const char *filename, char **names, int classes, int delay, char *prefix, int avg_frames, float hier, int w, int h, int frames, int fullscreen)
 {

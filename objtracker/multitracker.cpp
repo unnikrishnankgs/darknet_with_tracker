@@ -45,10 +45,13 @@
 #define MAX_TRACK_ITERATIONS 1
 
 #define TRACKING_ALGO "MEDIAN_FLOW"
+//#define TRACKING_ALGO "KCF"
 //#define TRACKING_ALGO "MIL"
 #define USE_CV_TRACKING
 #define OPTICAL_FLOW
-#define OPTICAL_FLOW_APPROXIMATION
+/** Force OFF the Optical flow resuults with the foll. macro */
+#define FORCE_OFF_OPTICAL_FLOW_RESULTS
+//#define OPTICAL_FLOW_APPROXIMATION
 #define OPT_FLOW_WINSIZE_W 50
 #define OPT_FLOW_WINSIZE_H 50
 
@@ -58,6 +61,8 @@
 
 #define CLASS_AGNOSTIC_BB_TRACKING
 #define ASSIGN_BBID_ONLY_ONCE
+
+//#define MULTI_ALGORITHMIC_APPROACH
 
 extern "C"
 {
@@ -615,7 +620,7 @@ int tracker_display_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase)
     imshow("base", imgBaseM);
     waitKey(1);
 #endif
-
+    return 1;
 }
 
 /** our IoU analysis functions */
@@ -761,7 +766,7 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
         pBBD = pBBD->pNext;
     }
 
-#if 0
+#ifdef MULTI_ALGORITHMIC_APPROACH
     /** for all tracked BBs, find the corresponding BB in the detection result by
      * matching the IoU between tracked BBs and detected BBs 
      */
@@ -802,6 +807,9 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
 #ifdef OPTICAL_FLOW_APPROXIMATION
                     if(k == 1)
                     {
+#ifdef FORCE_OFF_OPTICAL_FLOW_RESULTS
+                        ppBBT[k]->fIoU = 0;
+#endif
 #if 0
                         AnnInfo tmpT = *ppBBT[k];
                         tmpT.x -= (tmpT.w/2);
@@ -832,8 +840,8 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                         {
                             ppBBT[k]->fIoU = 1.0; /**< optical flow alone can have this way */
                         }
-#endif
                     }
+#endif
                 }
             }
             LOGV("IoU results %f %f\n", ppBBT[0]->fIoU, ppBBT[1]->fIoU);
@@ -867,12 +875,12 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                     tCandidateBB* pBBDC = pTrackerBBs[i].pCandidateBBs;
                     while(pBBDC)
                     {
-                        if(return_best_iou(pBBDCandidate->fIoU, pBBDC->fIoU) == pBBDCandidate->fIoU);
+                        if(return_best_iou(pBBDCandidate->fIoU, pBBDC->fIoU) == pBBDCandidate->fIoU)
                         {
                             break;
                         }
                         pBBDCPrev = pBBDC;
-                        pBBDC->pNext;
+                        pBBDC = pBBDC->pNext;
                     }
                     pBBDCandidate->pNext = pBBDC;
                     if(pBBDCPrev)
@@ -922,16 +930,23 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
 #endif
         
     }
-#endif
+#else
 
     pBBD = pDetectedBBs;
     while(pBBD)
     {
         for(int i = 0; i < nTrackerInSlots; i++)
         {
-            //if(!pTrackerBBs[i].bInDetectionList)
+            if(!pTrackerBBs[i].bInDetectionList)
             {
+                /** if not precise, the best approximation of
+                 * vehicle flux is what traffic engineers seek
+                 * [speaker {AS} @ NVIDIA AI City Challenge] */
                 if(isWithinBB(&pTrackerBBs[i].opticalFlowBB, pBBD))
+#if 0
+                pTrackerBBs[i].trackerBB.fIoU = find_iou(&pTrackerBBs[i].trackerBB, pBBD);
+                if(pTrackerBBs[i].trackerBB.fIoU > GOOD_IOU_THRESHOLD)
+#endif
                 {
                     LOGV("found in final parse\n");
                     pBBD->nBBId = pTrackerBBs[i].opticalFlowBB.nBBId;
@@ -943,6 +958,8 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
         }
         pBBD = pBBD->pNext;
     }
+
+#endif
 
 #if 0
     for(int i = 0; i < nTrackerInSlots; i++)
@@ -1049,10 +1066,12 @@ tAnnInfo* get_apt_candidateBB(tTrackerBBInfo* pTrackerBBs, const int nTrackerInS
     while(pBBDCandidate)
     {
         int isConflicting = 0;
-        for(int k = 0; k < nTrackerInSlots; k++)
+        for(int k = i+1; k < nTrackerInSlots; k++)
         {
-            if(k == i)
+            #if 0
+            if(k <= i)
                 continue;
+            #endif
             isConflicting = check_for_conflict(&pTrackerBBs[k], pBBDCandidate);
             LOGV("k=%d, pBBDCandidate=%p conflicting?=%d\n", k, pBBDCandidate, isConflicting);
             if(isConflicting)
@@ -1361,7 +1380,7 @@ typedef struct
     int to;
 }tViolation;
 
-tViolation gViolations[] = {{15, 4}};
+tViolation gViolations[] = {{10, 3}, {2, 11}};
 
 int isViolation(int from, int to)
 {
