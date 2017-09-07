@@ -344,3 +344,8 @@ height=416
 width=416
 }
 width and height shall be multiple of 32!
+
+2) OpenCV_contrib build error: dependency opencv_dnn: wouldn't build tracking module.
+This is a bug in OpenCV on TX2.
+Please clone latest OpenCV code and install following the instructions at http://opencv.org/
+> Tutorials > Introduction to OpenCV > Installation in Linux.
