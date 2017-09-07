@@ -326,3 +326,21 @@ Read: include/darknet_exp.h for the interface.
 Call darknet using run_detector_model() function. The data structures should be self-explanatory [We shall add documentation soon..] 
 
 
+===============================================================================
+TROUBLESHOOTING FAQ
+===============================================================================
+1) Error: "Killed" after the neural network load.
+Solution:
+Mostly the memory allocation might have overrun the GPU memory capability.
+Open: darknet_track/cfg/yolo-aic.cfg
+change lines 4,5:
+{
+height=640
+width=640
+}
+to a lower value; for example:
+{
+height=416
+width=416
+}
+width and height shall be multiple of 32!
