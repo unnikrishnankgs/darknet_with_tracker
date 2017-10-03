@@ -37,15 +37,28 @@
 #include "debug.h"
 
 //#define IMAGE_LIST
-//#define WRITE_PRED_FOR_MOTA
+#define WRITE_PRED_FOR_MOTA
 //#define OVERRIDE_CNN
+//#define MOT_ROOT "/media/unnikrishnan/Qi/2DMOT2015" 
+#define MOT_ROOT "/home/unnikrishnan/2DMOT2015" 
+//ADL-Rundle-6/   ADL-Rundle-8/   ETH-Bahnhof/    ETH-Pedcross2/  ETH-Sunnyday/   KITTI-13/       KITTI-17/       PETS09-S2L1/    TUD-Campus/     TUD-Stadtmitte/ Venice-2/
+//#define MOT_IMAGESET_NAME "ADL-Rundle-6"
+
+
+//ADL-Rundle-1/    ETH-Crossing/    KITTI-16/        TUD-Crossing/
+//ADL-Rundle-3/    ETH-Jelmoli/     KITTI-19/        Venice-1/
+//AVG-TownCentre/  ETH-Linthescher/ PETS09-S2L2/
+#define MOT_FOLDER_NAME "/train/"
+
+char* MOT_IMAGESET_NAME = "ADL-Rundle-1";
 
 /** } ISVA */
 
 
 #ifdef OPENCV
 
-#define MAX_FRAMES_TO_HASH 2
+//We are skipping MAX_FRAMES_TO_HASH - 2 frames
+#define MAX_FRAMES_TO_HASH 7
 
 #define ABS_DIFF(a, b) ((a) > (b)) ? ((a)-(b)) : ((b)-(a))
 
@@ -150,6 +163,8 @@ double get_wall_time()
     return (double)time.tv_sec + (double)time.tv_usec * .000001;
 }
 
+char B, G, R;
+
 void evaluate_detections(tFrame* pFrame, image im, int num, float thresh, box *boxes, float **probs, char **names, image **alphabet, int classes)
 {
     int i;
@@ -163,6 +178,12 @@ void evaluate_detections(tFrame* pFrame, image im, int num, float thresh, box *b
         int class_ = max_index(probs[i], classes);
         float prob = probs[i][class_];
         if(prob > thresh){
+#ifdef IMAGE_LIST
+            if(strcasecmp(names[class_], "person") != 0)
+            {
+                continue;
+            }
+#endif
 
             int width = im.h * .006;
 
@@ -199,6 +220,7 @@ void evaluate_detections(tFrame* pFrame, image im, int num, float thresh, box *b
             if(top < 0) top = 0;
             if(bot > im.h-1) bot = im.h-1;
 
+
 #ifdef DISPLAY_RESULS
             draw_box_width(im, left, top, right, bot, width, red, green, blue);
             if (alphabet) {
@@ -215,6 +237,9 @@ void evaluate_detections(tFrame* pFrame, image im, int num, float thresh, box *b
             annInfo.pcClassName = (char*)calloc(1, strlen(names[class_]) + 1);
             annInfo.nClassId = class_;
             annInfo.nBBId = pDetector->nBBCount++; /**< the unique object ID assigned to the BB initially by detector; used in IMPURE_CNN mode */
+            annInfo.B = rand() % 255;
+            annInfo.G = rand() % 255;
+            annInfo.R = rand() % 255;
             strcpy(annInfo.pcClassName, names[class_]);
             if(pDetector->pDetectorModel->isVideo)
                 annInfo.fCurrentFrameTimeStamp = pFrame->buff_ts;
@@ -350,8 +375,13 @@ tFrame* get_frame_from_cap(tDetector* pDetector, tFrame* apReuseFrame, double se
         {
 #ifdef IMAGE_LIST
             char filename[1024] = {0};
-            snprintf(filename, 1024, "/media/unnikrishnan/Qi/2DMOT2015/train/Venice-2/img1/%06d.jpg", ++pDetector->gIdx);
+            snprintf(filename, 1024, MOT_ROOT MOT_FOLDER_NAME "%s" "/img1/%06d.jpg", MOT_IMAGESET_NAME, ++pDetector->gIdx);
+            LOGV("our file to read is" "::" "%s\n", filename);
             pDetector->cap = cvCaptureFromFile(filename);
+            if(!pDetector->cap)
+            {
+                LOGE("failed to read [%s]\n", filename);
+            }
 #endif /**< IMAGE_LIST */
             buff_ts = cvGetCaptureProperty(pDetector->cap, CV_CAP_PROP_POS_MSEC);
         }
@@ -371,6 +401,7 @@ tFrame* get_frame_from_cap(tDetector* pDetector, tFrame* apReuseFrame, double se
       
         pFrame = (tFrame*)calloc(1, sizeof(tFrame));
         pFrame->nFrameId = pDetector->gIdx;
+        LOGV("frame ID assigned = %d\n", pFrame->nFrameId);
         pFrame->frameInfoWithCpy = frameInfoWithCpy;
         pFrame->buff = buff;
         LOGD("DEBUGME\n");
@@ -530,16 +561,29 @@ void fire_bb_callbacks_for_frame(tDetector* pDetector, tFrame* pFrame)
 #ifdef WRITE_PRED_FOR_MOTA
         /** check if Object-ID is a duplicate ?;
          * ignore duplicates */
-        if(isBBIdDuplicate(pFrame->pBBs, pBB))
+        if(strcasecmp(pBB->pcClassName, "person") != 0
+           || isBBIdDuplicate(pFrame->pBBs, pBB))
         {
             /** ignore */
-            LOGV("duplicate\n");
+            LOGV("duplicate %s\n", pBB->pcClassName);
         }
         else
         {
             /** use fprintf */
+            char file_name[200];// = "/home/unnikrishnan/" MOT_IMAGESET_NAME ".txt";
+            snprintf(file_name, 200, "/home/unnikrishnan" MOT_FOLDER_NAME "%s.txt", MOT_IMAGESET_NAME);
+            char file_cmd[200] = {0};
+            snprintf(file_cmd, 200, "rm %s", file_name);
+            
+            static int gRem = 0;
+
+            if(gRem == 0)
+            {
+                system(file_cmd);
+                gRem = 1;
+            }
             FILE * fp;
-            fp = fopen("/home/unnikrishnan/Venice-2.txt", "a");
+            fp = fopen(file_name, "a");
             LOGV("fp=%p\n", fp);
             fprintf(fp, "%d, %d, %d, %d, %d, %d, -1, -1, -1, -1\n", pFrame->nFrameId, pBB->nBBId, pBB->x, pBB->y, pBB->w, pBB->h);
             fclose(fp);
@@ -661,7 +705,7 @@ int interpolate_bbs_btw_frames(tDetector* pDetector, tFrame** ppFramesHashBase, 
                 LOGV("DEBUGME\n");
                 {
                     tAnnInfo* pBB1i; /**< between 1 and 2 */
-                    pBB1i = (tAnnInfo*)malloc(sizeof(tAnnInfo));
+                    pBB1i = (tAnnInfo*)calloc(1, sizeof(tAnnInfo));
                     tBBBounds bbb1i;
                     double dispToNewPoint = (D / (nL - nF)) * (i); /**< divide D equally between the frames and mult by i; i shall never be 0 cause nF is arr index */ 
                     double fFrac = D ? dispToNewPoint / D : 0;
@@ -830,7 +874,10 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
 
 #ifdef OVERRIDE_CNN
     LOGV("going to read detection txt file\n");
-    char* det_file_name =  "/media/unnikrishnan/Qi/2DMOT2015/train/Venice-2/det/det.txt";
+    //char* det_file_name =  "/media/unnikrishnan/Qi/2DMOT2015/train/Venice-2/det/det.txt";
+    //char* det_file_name =  "/media/unnikrishnan/Qi/2DMOT2015/train/Venice-2/gt/gt.txt";
+    char* det_file_name;// =  MOT_ROOT MOT_FOLDER_NAME MOT_IMAGESET_NAME "/gt/gt.txt";
+    snprintf(det_file_name, MOT_ROOT MOT_FOLDER_NAME "%s" "/gt/gt.txt", MOT_IMAGESET_NAME);
     tFrame* pDetectionOnFramesResults = read_MOT_detection(pDetector, det_file_name);
     if(!pDetectionOnFramesResults)
     {
@@ -916,10 +963,14 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                 if(i >= (nFIdxToReadInto+1) && i < (nL-1))
                 {
                     LOGV("seeking %d\n", i);
+#ifdef IMAGE_LIST
+                    pDetector->pFramesHash[i] = get_frame_from_cap(pDetector, NULL, pDetector->countFrame, 0, 0);
+#else
                     if(cvGrabFrame(pDetector->cap))
                         pDetector->pFramesHash[i] = (tFrame*)calloc(1, sizeof(tFrame));
                     else
                         pDetector->pFramesHash[i] = NULL;
+#endif
                 }
                 else
                 {
@@ -937,7 +988,7 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                         dump_lane_info(pDetector->pLanesInfo);
                         return;
                     }
-                    nL = i - 1;
+                    nL = i;
                     LOGV("prob with read\n");
                     break;
                 }
@@ -1091,14 +1142,18 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                 }
                 pDetector->countFrame++;
                 /** delete prev frame; we dont need it; this exercise is alt to seek */
+#if 1
                 if(pFramePrev)
                 {
+                    pDetector->pFramesHash[i-1] = calloc(1, sizeof(tFrame));
+                    pDetector->pFramesHash[i-1]->nFrameId = pFramePrev->nFrameId;
                     free_frame(pDetector, pFramePrev);
-                    pDetector->pFramesHash[i-1] = calloc(1, sizeof(tFrame));;
                 }
+#endif
             }
             pDetector->fEndTime = get_wall_time();
-            LOGV("[except for 1st print] seek took %fms; means read is @ %ffps\n", 
+            LOGV("nL=%d [except for 1st print] seek took %fms; means read is @ %ffps\n", 
+                nL,
                 (pDetector->fEndTime - pDetector->fStartTime) * 1000.0,
                 (nL * 1.0) / (pDetector->fEndTime - pDetector->fStartTime));
            
@@ -1140,7 +1195,7 @@ void demo2(void* apDetector, char *cfgfile, char *weightfile, float thresh, int 
                 LOGV("DEBUGME %p\n", pDetector->pFramesHash);
                 if(pDetector->pFramesHash[i])
                 {
-                    LOGV("firing CB for frame %d BBs=%p\n", i, pDetector->pFramesHash[i]->pBBs);
+                    LOGV("firing CB for frame %d BBs=%p %d\n", i, pDetector->pFramesHash[i]->pBBs, pDetector->pFramesHash[i]->nFrameId);
                     fire_bb_callbacks_for_frame(pDetector, pDetector->pFramesHash[i]);
                     if((i == (nL-1)) && !pDetector->demo_done)
                     {
@@ -1374,16 +1429,29 @@ int run_detector_model(tDetectorModel* apDetectorModel)
         {
             LOGD("in %p\n", apDetectorModel);
             LOGD("demo start %s\n", apDetectorModel->pcDataCfg);
-            list *options = read_data_cfg(apDetectorModel->pcDataCfg ? apDetectorModel->pcDataCfg : "cfg/aic.data");
+            list *options = read_data_cfg(apDetectorModel->pcDataCfg ? apDetectorModel->pcDataCfg : 
+                #ifdef IMAGE_LIST
+                "cfg/coco.data"
+                #else
+                "cfg/aic.data"
+                #endif
+                );
             LOGD("h1\n");
-            char *name_list = option_find_str(options, "names", apDetectorModel->pcNames ? apDetectorModel->pcNames : "data/names.list");
+            char *name_list = option_find_str(options, "names", apDetectorModel->pcNames ? apDetectorModel->pcNames : 
+                #ifdef IMAGE_LIST
+                "data/voc.names"
+                #else
+                "data/names.list"
+                #endif
+                );
             LOGD("name_list=%s\n", name_list);
             char **names = get_labels(name_list);
             LOGD("h1\n");
             int classes = option_find_int(options, "classes", 20);
             LOGD("h1\n");
             LOGD("Detector Model cb is %p\n", pDetector->pDetectorModel->pfnRaiseAnnCb);
-            demo2(pDetector, apDetectorModel->pcCfg, apDetectorModel->pcWeights, 0.24/**< apDetectorModel->fThresh */, 
+            demo2(pDetector, apDetectorModel->pcCfg, apDetectorModel->pcWeights, 
+                0.24/**< apDetectorModel->fThresh */, 
                 0/**< cam_index */, apDetectorModel->pcFileName, names, classes, 0 /**< frame_skip */, 
                 NULL, 1, pDetector->demo_hier, 0 /**< w */, 0 /**< h */, 0 /**< 0 */, 0 /**< fullscreen */
                 );
@@ -1556,5 +1624,7 @@ void dump_lane_info(tLanesInfo* pLanesInfo)
         fwrite(cJSON_Print(pJSONFinalPattern), 1, strlen(cJSON_Print(pJSONFinalPattern)), fp);
         cJSON_free(pJSONFinalPattern);
         fclose(fp);
+            double percent =  (pLanesInfo->gnOptF / pLanesInfo->gnTot) * 100.0;
+            LOGV("Simp Opt Flow=%f Other=%f\n", percent, (100.0 - percent));
     }   
 }
