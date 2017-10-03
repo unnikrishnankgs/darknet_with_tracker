@@ -105,6 +105,22 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                 tAnnInfo** ppDetectedBBs,
                 tLanesInfo* pLanesInfo);
 tAnnInfo* make_copy_of_current_set(tAnnInfo* pDetectedBBs);
+/** 
+ * @fn int check_if_KalmanAffirmTracker(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs, tAnnInfo* pDetectedBBs)
+ * @param pBBIn [IN] Current Tracked Bounding box
+ * @param apCopyDetectedBBs [IN] Dected objects' Bounding boxes from the Frame Previous
+ * @param pDetectedBBs [IN] Dected objects' Bounding boxes from the Frame Current
+ * @return 1: if Kalman results confirm that the tracking is confidently proper
+ *            In this case, even if Object Detection failed, Kalman helps us affirm that 
+ *            tracker results are proper and helps us continue to track the object
+ *            In fact Kalman results can override our tracker result (shall confirm by trail and error)
+ * @brief     Thus, this helps us continue tracking an object even if object detection/tracking fails 
+ *            (probably when the object went under a 100% occlusion)
+ *            This occlusion could be -- in traffic -- a truck moving by our target object, say a car
+ *            and thus blocking the Camera view on that car!
+ * ; else return 0
+ */
+//int check_if_KalmanAffirmTracker(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs, tAnnInfo* pDetectedBBs);
 int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs, tAnnInfo* pDetectedBBs);
 int isWithinBB(tAnnInfo* pBBP, tAnnInfo* pBBD);
 int isWithinBB_UseCenter(tAnnInfo* pBBP, tAnnInfo* pBBD);
