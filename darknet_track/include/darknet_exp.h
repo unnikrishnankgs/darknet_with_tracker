@@ -22,6 +22,11 @@ struct AnnInfo
      int nLaneHistory;
      double fStartTS;
      tAnnInfo* pNext;
+     char B;
+     char G;
+     char R;
+     double nMotionLevel;
+     void* pTracker;
 };
 
 typedef struct

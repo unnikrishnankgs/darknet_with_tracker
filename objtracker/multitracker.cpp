@@ -26,6 +26,11 @@
 #include <ctime>
 #include "opencv2/video/tracking.hpp"
 
+#include "sca5.h"
+
+//#define DUMP_OP_IMAGE
+//#define DUMP_OP_PATH "/hash30/"
+
 #include "multitracker.h"
 //#define DEBUG
 #define VERBOSE
@@ -40,29 +45,38 @@
 #define RED     "\033[31m"      /* Red */
 #define GREEN   "\033[32m"      /* Green */
 
-//#define USE_MULTI_TRACKER
 #define DISPLAY_RESULTS
+//#define DISPLAY_LANES
 #define MAX_TRACK_ITERATIONS 1
 
-#define TRACKING_ALGO "MEDIAN_FLOW"
-//#define TRACKING_ALGO "KCF"
+//#define TRACKING_ALGO "MEDIAN_FLOW"
+#define TRACKING_ALGO "BOOSTING"//"MIL"
 //#define TRACKING_ALGO "MIL"
 #define USE_CV_TRACKING
 #define OPTICAL_FLOW
 /** Force OFF the Optical flow resuults with the foll. macro */
-#define FORCE_OFF_OPTICAL_FLOW_RESULTS
-//#define OPTICAL_FLOW_APPROXIMATION
 #define OPT_FLOW_WINSIZE_W 50
 #define OPT_FLOW_WINSIZE_H 50
 
-#define ABS_DIFF(a, b) ((a) > (b)) ? ((a)-(b)) : ((b)-(a))
+#define OPT_FLOW_WINSIZE_W_MAX 150
+#define OPT_FLOW_WINSIZE_H_MAX 150
+
+#define ABS_DIFF(a, b) (((a) > (b)) ? ((a)-(b)) : ((b)-(a)))
 #define GOOD_IOU_THRESHOLD (0.5)
 #define MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW 5
 
 #define CLASS_AGNOSTIC_BB_TRACKING
 #define ASSIGN_BBID_ONLY_ONCE
 
-//#define MULTI_ALGORITHMIC_APPROACH
+#define MULTI_ALGORITHMIC_APPROACH
+
+
+#ifdef MULTI_ALGORITHMIC_APPROACH
+
+//#define FORCE_OFF_OPTICAL_FLOW_RESULTS
+#define OPTICAL_FLOW_APPROXIMATION
+
+#endif
 
 extern "C"
 {
@@ -91,8 +105,9 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                 tAnnInfo** ppDetectedBBs,
                 tLanesInfo* pLanesInfo);
 tAnnInfo* make_copy_of_current_set(tAnnInfo* pDetectedBBs);
-int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs);
+int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs, tAnnInfo* pDetectedBBs);
 int isWithinBB(tAnnInfo* pBBP, tAnnInfo* pBBD);
+int isWithinBB_UseCenter(tAnnInfo* pBBP, tAnnInfo* pBBD);
 void collect_analysis(tAnnInfo* pCurrFrameBBs, tAnnInfo* pPrevFrameBBs, tLanesInfo* pLanesInfo);
 tLane* laneWithThisBB(tLanesInfo* pLanesInfo, tAnnInfo* pBBNode);
 
@@ -102,9 +117,45 @@ static tAnnInfo* pCopyDetectedBBs;
 
 tAnnInfo* get_apt_candidateBB(tTrackerBBInfo* pTrackerBBs, const int nTrackerInSlots, const int i);
 
+#include <opencv2/tracking/tracker.hpp>
+
 inline cv::Ptr<cv::Tracker> createTrackerByName(cv::String name)
 {
     cv::Ptr<cv::Tracker> tracker;
+#if 0
+    cv::TrackerKCF::Params params = {
+      0.5,
+      sigma=
+      0.2,
+      lambda=
+        0.01,
+      interp_factor=
+        0.075,
+      output_sigma_factor=
+        1.0/16.0,
+      resize=
+        true,
+      max_patch_size=
+        80*80,
+      split_coeff=
+        true,
+      wrap_kernel=
+        false,
+      desc_npca = 
+        GRAY,
+      desc_pca = 
+        CN,
+
+      //feature compression
+      compress_feature=
+        true,
+      compressed_size=
+        2,
+      pca_learning_rate=
+        0.15,
+  }
+#endif
+
 
     if (name == "KCF")
         tracker = cv::TrackerKCF::create();
@@ -267,15 +318,222 @@ static Mat image_to_mat(tFrameInfo* pF, bool copy)
     return mat;
 }
 
+void trackOpenCVAlgo(tAnnInfo* apBoundingBoxesIn, Mat imgBaseM, 
+    tFrameInfo* pFTarg, Mat imgTargM,
+    tTrackerBBInfo* pTrackerBBs,
+    String trackingAlg, int idxIn, tAnnInfo* pBB,
+    tAnnInfo** ppOutBBs)
+{
+#if 0
+    int idxIn = 0;
+    tAnnInfo* pBB;
+        pBB = apBoundingBoxesIn;
+#endif
+#ifdef USE_CV_TRACKING
+        bool ret;
+        tAnnInfo* pTrackerOutBBs = *ppOutBBs;
+        //while(pBB)
+        {
+            tAnnInfo* pBBTmp;
+
+#if 0
+            if(pBB->nMotionLevel > 40)
+            {
+                trackingAlg = "BOOSTING";
+            }
+            else
+            {
+                    pBBTmp = &pTrackerBBs[idxIn].trackerBB;
+                    memcpy(pBBTmp, pBB, sizeof(tAnnInfo));
+                    pBBTmp->pcClassName = (char*)malloc(strlen(pBB->pcClassName) + 1);
+                    strcpy(pBBTmp->pcClassName, pBB->pcClassName);
+                    pBBTmp->fCurrentFrameTimeStamp = pFTarg->fCurrentFrameTimeStamp;
+                    pBBTmp->pNext = pTrackerOutBBs;
+                    pBBTmp->pTracker = (void*)NULL;
+                    pTrackerOutBBs = pBBTmp;
+                    pTrackerBBs[idxIn].trackerBB = *pBBTmp;
+
+                    pTrackerBBs[idxIn].pBBTOrig = pBB;
+                    pBB = pBB->pNext;
+                    idxIn++;
+                    LOGV("no movement in this object\n");
+                    continue;
+            }
+#endif
+
+
+            Ptr<Tracker>* pTracker = NULL;
+            if(!pBB->pTracker)
+            {
+                Ptr<Tracker> tracker = createTrackerByName(trackingAlg);
+                pTracker = new Ptr<Tracker>(tracker);
+                LOGV("DEBUGME\n");
+                ret = (*pTracker)->init(imgBaseM, Rect2d(pBB->x, pBB->y, pBB->w, pBB->h));
+                LOGV("initialized with %d %d %d %d ret=%d\n", pBB->x, pBB->y, pBB->w, pBB->h, ret);
+            }
+            else
+            {
+                LOGV("obj being tracked\n");
+                pTracker = (Ptr<Tracker>*)(pBB->pTracker);
+                ret = 1;
+            }
+            if(ret)
+            {
+                Rect2d object;
+                //update with target
+                for(int i = 0; i < MAX_TRACK_ITERATIONS; i++)
+                {
+                    ret = (*pTracker)->update(imgTargM, object);
+                    if(ret)
+                    {
+                        LOGV("update: (%f, %f) (%f, %f)\n", object.x, object.y, object.width, object.height);
+                    }
+                }
+                if(ret)
+                {
+                    LOGD("found\n");
+                    pBBTmp = &pTrackerBBs[idxIn].trackerBB;
+                    memcpy(pBBTmp, pBB, sizeof(tAnnInfo));
+                    pBBTmp->x = (int)(object.x);
+                    pBBTmp->y = (int)(object.y);
+                    pBBTmp->w = (int)(object.width);
+                    pBBTmp->h = (int)(object.height);
+                    pBBTmp->pcClassName = (char*)malloc(strlen(pBB->pcClassName) + 1);
+                    strcpy(pBBTmp->pcClassName, pBB->pcClassName);
+                    pBBTmp->fCurrentFrameTimeStamp = pFTarg->fCurrentFrameTimeStamp;
+                    pBBTmp->pNext = pTrackerOutBBs;
+                    pBBTmp->pTracker = (void*)pTracker;
+                    *ppOutBBs = pTrackerOutBBs = pBBTmp;
+                    pTrackerBBs[idxIn].trackerBB = *pBBTmp;
+                    LOGV("stored %d %d %d %d ret=%d\n", pBBTmp->x, pBBTmp->y, pBBTmp->w, pBBTmp->h, ret);
+#ifdef MULTI_ALGORITHMIC_APPROACH
+                    pTrackerBBs[idxIn].opticalFlowBB = *pBBTmp;
+#endif
+                }
+                else
+                {
+                    LOGD("unable to track this object in tracker\n");
+                }
+            }
+            pTrackerBBs[idxIn].pBBTOrig = pBB;
+#if 0
+            pBB = pBB->pNext;
+            idxIn++;
+#endif
+        }
+#endif
+
+}
+
+void trackOpticalFlow(tAnnInfo* apBoundingBoxesIn, Mat imgBaseM, 
+    tFrameInfo* pFTarg, Mat imgTargM,
+    tTrackerBBInfo* pTrackerBBs, int idxIn, tAnnInfo* pBB,
+    tAnnInfo** ppOutBBs, tGrid* gridMotion)
+{
+#if 0
+    int idxIn = 0;
+    tAnnInfo* pBB;
+        pBB = apBoundingBoxesIn;
+#endif
+#ifdef OPTICAL_FLOW
+        tAnnInfo* pOpticalFlowOutBBs = *ppOutBBs;
+        TermCriteria termcrit(TermCriteria::COUNT|TermCriteria::EPS,20,0.03);
+        //while(pBB)
+        {
+            tAnnInfo* pBBTmp;
+            vector<uchar> status;
+            vector<float> err;
+            vector<Point2f> points[2];
+            points[0].push_back(Point2f((float)(pBB->x) + ((float)pBB->w)/2, (float)(pBB->y) + (float)(pBB->h)/2));
+
+
+            if(pBB->nMotionLevel > 0)
+            {
+            Size subPixWinSize((float)pBB->w/2,(float)pBB->h/2);
+            Mat gray;
+            cvtColor(imgBaseM, gray, COLOR_BGR2GRAY);
+            //cornerSubPix(gray, points[0], subPixWinSize, Size(-1,-1), termcrit);
+            //Size winSize(1920,1080);
+            int w = 0, h = 0;
+            getWindowSize(gridMotion, points[0][0].x, points[0][0].y, w, h);
+            LOGV("w=%d h=%d\n", w, h);
+#if 0
+            if(w > OPT_FLOW_WINSIZE_W && h > OPT_FLOW_WINSIZE_H
+              && w < OPT_FLOW_WINSIZE_W_MAX && h < OPT_FLOW_WINSIZE_H_MAX
+            )
+            {
+
+            }
+            else
+#endif
+            {
+                w = OPT_FLOW_WINSIZE_W;
+                h = OPT_FLOW_WINSIZE_H;
+            }
+            Size winSize(w, h);
+#if 0
+            std::vector<Mat> pyramid;
+            buildOpticalFlowPyramid(imgBaseM, pyramid, winSize, 2, true);
+#endif
+            calcOpticalFlowPyrLK(imgBaseM, imgTargM, points[0], points[1], status, err, winSize,
+                                 3, termcrit, 0, 0.001);
+            size_t i, k;
+            LOGV("number of output points=%ld\n", points[1].size());
+            for( i = k = 0; i < points[1].size(); i++ )
+            {
+                //if( norm(point - points[1][i]) <= 5 )
+
+                if( !status[i] )
+                    continue;
+
+                points[1][k++] = points[1][i];
+                circle( imgTargM, points[1][i], 3, Scalar(0,255,0), -1, 8);
+            }
+            points[1].resize(k);
+            }
+            else
+            {
+                status.push_back(1);
+                points[1].push_back(Point2f(points[0][0]));
+            }
+            if( status[0] )
+            {
+            pBBTmp = &pTrackerBBs[idxIn].trackerBB;
+            memcpy(pBBTmp, pBB, sizeof(tAnnInfo));
+#if 1
+            pBBTmp->x = (int)(points[1][0].x - (((float)pBB->w)/2));
+            pBBTmp->y = (int)(points[1][0].y - (((float)pBB->h)/2));
+#else
+            pBBTmp->x = (int)(points[1][0].x - ((pBB->w * 1.0)/2));
+            pBBTmp->y = (int)(points[1][0].y - ((pBB->h * 1.0)/2));
+#endif
+            pBBTmp->pcClassName = (char*)malloc(strlen(pBB->pcClassName) + 1);
+            strcpy(pBBTmp->pcClassName, pBB->pcClassName);
+            pBBTmp->fCurrentFrameTimeStamp = pFTarg->fCurrentFrameTimeStamp;
+            pBBTmp->pNext = pOpticalFlowOutBBs;
+            *ppOutBBs = pOpticalFlowOutBBs = pBBTmp;
+#ifdef MULTI_ALGORITHMIC_APPROACH
+            pTrackerBBs[idxIn].opticalFlowBB = *pBBTmp;
+#endif
+            }
+            pTrackerBBs[idxIn].pBBTOrig = pBB;
+            idxIn++;
+            pBB = pBB->pNext;
+        }
+#endif
+}
+
 int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInfo* pFTarg, tAnnInfo** appBoundingBoxesInOut, tLanesInfo* pLanesInfo)
 {
     int ret = 0;
     Mat imgBaseM;
     Mat imgTargM;
+    Mat imgBaseMC;
+    Mat imgTargMC;
     tAnnInfo* pBB;
     tTrackerBBInfo* pTrackerBBs = NULL;
     int nInBBs = 0;
-    int idxIn = 0;
+    tGrid gridMotion = {0};
     
     LOGV("DEBUGME\n");
     if(!apBoundingBoxesIn || !appBoundingBoxesInOut || !pFBase || !pFTarg)
@@ -283,17 +541,35 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
         return ret;
     }
 
+    LOGV("DEBUGME w=%d h=%d pFBase->im.c=%d\n", pFBase->im.w, pFBase->im.h, pFBase->im.c);
+    imgBaseMC = image_to_mat(pFBase, false);
+    imgTargMC = image_to_mat(pFTarg, false);
+
+    imgBaseM = imgBaseMC.clone();
+    imgTargM = imgTargMC.clone();
+
+    sca5(imgBaseMC, imgTargMC, &gridMotion);
+
     pBB = apBoundingBoxesIn;
     while(pBB)
     {
         nInBBs++;
+        double nMotionLevel = getMotionLevel(&gridMotion, pBB->x, pBB->y, pBB->w, pBB->h);
+        LOGV("nMotionLevel = %f\n", nMotionLevel);
+        pBB->nMotionLevel = nMotionLevel;
         pBB = pBB->pNext;
     }
+    pBB = *appBoundingBoxesInOut;
+    while(pBB)
+    {
+        double nMotionLevel = getMotionLevel(&gridMotion, pBB->x, pBB->y, pBB->w, pBB->h);
+        LOGV("nMotionLevel = %f\n", nMotionLevel);
+        pBB->nMotionLevel = nMotionLevel;
+        pBB = pBB->pNext;
+    }
+
     pTrackerBBs = (tTrackerBBInfo*)calloc(nInBBs, sizeof(tTrackerBBInfo));
 
-    LOGV("DEBUGME w=%d h=%d pFBase->im.c=%d\n", pFBase->im.w, pFBase->im.h, pFBase->im.c);
-    imgBaseM = image_to_mat(pFBase, false);
-    imgTargM = image_to_mat(pFTarg, false);
 
 #if 0
     imshow("base", imgBaseM);
@@ -316,41 +592,7 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
     // set the default tracking algorithm
     String trackingAlg = TRACKING_ALGO;
 
-    // create the tracker
-#ifdef USE_MULTI_TRACKER
-    MultiTracker trackers;
-#else
-#endif
-
-    std::vector<Ptr<Tracker> > algorithms;
-
-    LOGV("DEBUGME\n");
-#ifdef USE_MULTI_TRACKER
-    // container of the to be tracked objects
-    vector<Rect2d> objects;
-    pBB = apBoundingBoxesIn;
-    while(pBB)
-    {
-        algorithms.push_back(createTrackerByName(trackingAlg));
-        LOGV("adding %d %d %d %d\n", pBB->x, pBB->y, pBB->w, pBB->h);
-        objects.push_back(Rect2d(pBB->x, pBB->y, pBB->w, pBB->h));
-        pBB = pBB->pNext;
-    }
-#endif
-    LOGV("DEBUGME\n");
-
-
-    LOGV("DEBUGME\n");
-    // initialize the tracker
-#ifdef USE_MULTI_TRACKER
-    trackers.add(algorithms,imgBaseM,objects);
-#else
-#endif
-
-    LOGV("DEBUGME\n");
-
     // do the tracking
-    TermCriteria termcrit(TermCriteria::COUNT|TermCriteria::EPS,20,0.03);
     {
         // start the timer
   #ifdef HAVE_OPENCV
@@ -369,138 +611,44 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
         timer.reset();
   #else
         timer=clock();
-        #ifdef USE_MULTI_TRACKER
-        trackers.update(imgTargM);
-        #else
-        #endif
         timer=clock()-timer;
         fps=(double)CLOCKS_PER_SEC/(double)timer;
   #endif
-  
-#ifdef USE_MULTI_TRACKER
-        LOGV("DEBUGME %d\n", (int)trackers.getObjects().size());
-        // draw the tracked object
-        for(unsigned i=0;i<trackers.getObjects().size();i++)
-          rectangle(imgTargM, trackers.getObjects()[i], Scalar( 255, 0, 0 ), 2, 1 );
-#endif
 
-#ifndef USE_MULTI_TRACKER
+  
+#if 1
+#if 1
+        tAnnInfo* pOutBBs = NULL;
+        pBB = apBoundingBoxesIn;
+        int idxIn = 0;
+        while(pBB)
+        {
+            if(
+#ifdef MULTI_ALGORITHMIC_APPROACH
+                pBB->nMotionLevel < 150.0
+#else
+                1
+#endif
+              )
+            {
+                {
+                    trackOpticalFlow(apBoundingBoxesIn, imgBaseM, pFTarg, imgTargM, pTrackerBBs, idxIn++, pBB, &pOutBBs, &gridMotion);
+                }
+                pLanesInfo->gnOptF++;
+            }
+            else
+            {
+                LOGV("lot of motion %d motion=%f\n", pBB->nBBId, pBB->nMotionLevel);
+                trackOpenCVAlgo(apBoundingBoxesIn, imgTargM, pFTarg, imgTargM, pTrackerBBs, trackingAlg, idxIn++, pBB, &pOutBBs);
+            }
+            pBB = pBB->pNext;
+            pLanesInfo->gnTot++;
+        }
+#endif
         /** optical flow */
         
-#ifdef OPTICAL_FLOW
-        pBB = apBoundingBoxesIn;
-        idxIn = 0;
-        tAnnInfo* pOpticalFlowOutBBs = NULL;
-        while(pBB)
-        {
-            tAnnInfo* pBBTmp;
-            vector<uchar> status;
-            vector<float> err;
-            vector<Point2f> points[2];
-            points[0].push_back(Point2f((float)(pBB->x) + ((float)pBB->w)/2, (float)(pBB->y) + (float)(pBB->h)/2));
-            Size subPixWinSize((float)pBB->w/2,(float)pBB->h/2);
-            Mat gray;
-            cvtColor(imgBaseM, gray, COLOR_BGR2GRAY);
-            //cornerSubPix(gray, points[0], subPixWinSize, Size(-1,-1), termcrit);
-            //Size winSize(1920,1080);
-            Size winSize(OPT_FLOW_WINSIZE_W, OPT_FLOW_WINSIZE_H);
-#if 0
-            std::vector<Mat> pyramid;
-            buildOpticalFlowPyramid(imgBaseM, pyramid, winSize, 2, true);
-#endif
-            calcOpticalFlowPyrLK(imgBaseM, imgTargM, points[0], points[1], status, err, winSize,
-                                 3, termcrit, 0, 0.001);
-            size_t i, k;
-            LOGV("number of output points=%ld\n", points[1].size());
-            for( i = k = 0; i < points[1].size(); i++ )
-            {
-                //if( norm(point - points[1][i]) <= 5 )
 
-                if( !status[i] )
-                    continue;
-
-                points[1][k++] = points[1][i];
-                circle( imgTargM, points[1][i], 3, Scalar(0,255,0), -1, 8);
-            }
-            if( status[0] )
-            {
-            points[1].resize(k);
-            pBBTmp = &pTrackerBBs[idxIn].opticalFlowBB;
-            memcpy(pBBTmp, pBB, sizeof(tAnnInfo));
-#if 1
-            pBBTmp->x = (int)(points[1][0].x);
-            pBBTmp->y = (int)(points[1][0].y);
-#else
-            pBBTmp->x = (int)(points[1][0].x - ((pBB->w * 1.0)/2));
-            pBBTmp->y = (int)(points[1][0].y - ((pBB->h * 1.0)/2));
-#endif
-            pBBTmp->pcClassName = (char*)malloc(strlen(pBB->pcClassName) + 1);
-            strcpy(pBBTmp->pcClassName, pBB->pcClassName);
-            pBBTmp->fCurrentFrameTimeStamp = pFTarg->fCurrentFrameTimeStamp;
-            pBBTmp->pNext = pOpticalFlowOutBBs;
-            pOpticalFlowOutBBs = pBBTmp;
-            }
-            pTrackerBBs[idxIn].pBBTOrig = pBB;
-            idxIn++;
-            pBB = pBB->pNext;
-        }
-#endif
-
-
-#ifdef USE_CV_TRACKING
-        bool ret;
-        pBB = apBoundingBoxesIn;
-        tAnnInfo* pTrackerOutBBs = NULL;
-        idxIn = 0;
-        while(pBB)
-        {
-            tAnnInfo* pBBTmp;
-            Ptr<Tracker> tracker = createTrackerByName(trackingAlg);
-            if(!tracker)
-                continue;
-            ret = tracker->init(imgBaseM, Rect2d(pBB->x, pBB->y, pBB->w, pBB->h));
-            LOGV("initialized with %d %d %d %d ret=%d\n", pBB->x, pBB->y, pBB->w, pBB->h, ret);
-            if(ret)
-            {
-                Rect2d object;
-                //update with target
-                for(int i = 0; i < MAX_TRACK_ITERATIONS; i++)
-                {
-                    ret = tracker->update(imgTargM, object);
-                    if(ret)
-                    {
-                        LOGV("update: (%f, %f) (%f, %f)\n", object.x, object.y, object.width, object.height);
-                    }
-                }
-                if(ret)
-                {
-                    LOGD("found\n");
-                    pBBTmp = &pTrackerBBs[idxIn].trackerBB;
-                    memcpy(pBBTmp, pBB, sizeof(tAnnInfo));
-                    pBBTmp->x = (int)(object.x);
-                    pBBTmp->y = (int)(object.y);
-                    pBBTmp->w = (int)(object.width);
-                    pBBTmp->h = (int)(object.height);
-                    pBBTmp->pcClassName = (char*)malloc(strlen(pBB->pcClassName) + 1);
-                    strcpy(pBBTmp->pcClassName, pBB->pcClassName);
-                    pBBTmp->fCurrentFrameTimeStamp = pFTarg->fCurrentFrameTimeStamp;
-                    pBBTmp->pNext = pTrackerOutBBs;
-                    pTrackerOutBBs = pBBTmp;
-                    pTrackerBBs[idxIn].trackerBB = *pBBTmp;
-                    LOGV("stored %d %d %d %d ret=%d\n", pBBTmp->x, pBBTmp->y, pBBTmp->w, pBBTmp->h, ret);
-                }
-                else
-                {
-                    LOGD("unable to track this object in tracker\n");
-                }
-            }
-            pTrackerBBs[idxIn].pBBTOrig = pBB;
-            //objects.push_back(Rect2d(pBB->x, pBB->y, pBB->w, pBB->h));
-            pBB = pBB->pNext;
-            idxIn++;
-            //delete tracker;
-        }
-#endif
+        /** other trackers */
 
         /** process BB's tracked in the detection list */
             /** make the final output list of BBs from the lists generated by
@@ -541,6 +689,7 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
         text = buffer;
         putText(imgTargM, text, Point(20,20), FONT_HERSHEY_PLAIN, 1, Scalar(255,255,255));
 
+#ifdef DISPLAY_LANES
         if(pLanesInfo)
         {
                 LOGV("DEBUGME\n");
@@ -576,7 +725,26 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
             }
                 LOGV("DEBUGME\n");
         }
+#endif /**< DISPLAY_LANES */
   
+        #ifdef DUMP_OP_IMAGE
+        display_results(imgBaseM, apBoundingBoxesIn);
+        display_results(imgTargM, pTrackerOutBBs);
+        vector<int> compression_params;
+        compression_params.push_back(CV_IMWRITE_PNG_COMPRESSION);
+        compression_params.push_back(9);
+        char file_name[1024];
+        snprintf(file_name, 1024, "mkdir -p output/" DUMP_OP_PATH);
+        system(file_name);
+        static int img_pairs_processed = 0;
+        snprintf(file_name, 1024, "output/" DUMP_OP_PATH "output-b%04d.png", img_pairs_processed);
+        ret = imwrite(file_name, imgBaseM, compression_params);
+        snprintf(file_name, 1024, "output/" DUMP_OP_PATH "output-t%04d.png", img_pairs_processed);
+        ret = imwrite(file_name, imgTargM, compression_params);
+        printf("ret=%d\n", ret);
+        if(++img_pairs_processed == 2)
+            exit(0);
+        #endif
         display_results(imgTargM, *appBoundingBoxesInOut);
         // show image with the tracked object
         imshow("tracker",imgTargM);
@@ -592,6 +760,9 @@ int track_bb_in_frame(tAnnInfo* apBoundingBoxesIn, tFrameInfo* pFBase, tFrameInf
 
     if(pTrackerBBs)
         free(pTrackerBBs);
+
+    freeGrid(&gridMotion);
+
     return ret;
 }
 
@@ -656,6 +827,7 @@ double return_best_iou(double bb1, double bb2)
     double bb1_distance_from_best_iou = ABS_DIFF(1.0, bb1);
     double bb2_distance_from_best_iou = ABS_DIFF(1.0, bb2);
 
+    LOGV("%f %f\n", bb1_distance_from_best_iou, bb2_distance_from_best_iou);
     if(bb1_distance_from_best_iou <= bb2_distance_from_best_iou)
         return bb1;
    
@@ -761,6 +933,10 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
     tAnnInfo* pBBDPrev = NULL;
     while(pBBD)
     {
+        if(pBBD->nMotionLevel ==  0.0)
+        {
+            LOGV("pBBD->nMotionLevel = %f\n", pBBD->nMotionLevel);
+        }
         pBBD->fIoU = 0;
         pBBD->bBBIDAssigned = 0;
         pBBD = pBBD->pNext;
@@ -825,11 +1001,14 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                         LOGV("displacement (%p) is %f %d\n", pBBTmp, disp,  pBBTmp ? MAX(pBBTmp->w, pBBTmp->h) : 0);
 #endif
 #if 1
-                        if((ppBBT[k]->x < pBBD->x + pBBD->w + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
+                        if(
+#if 0
+                           (ppBBT[k]->x < pBBD->x + pBBD->w + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
                            && (ppBBT[k]->y  < pBBD->y + pBBD->h + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
                            && (ppBBT[k]->x > (pBBD->x > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->x - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0)) 
                            && (ppBBT[k]->y > (pBBD->y > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->y - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0))
-                          )
+#endif
+                          isWithinBB_UseCenter(ppBBT[k], pBBD))
 #else
                         if((ppBBT[k]->x < pBBD->x + ((pBBD->w * 3.0) / 4) + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
                            && (ppBBT[k]->y  < pBBD->y + ((pBBD->h * 3.0) / 4)  + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
@@ -911,9 +1090,15 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
         if(pBBD)
         {
             pTrackerBBs[i].bInDetectionList = 1;
-            pBBD->nBBId = pTrackerBBs[i].opticalFlowBB.nBBId;
+            //pBBD->nBBId = pTrackerBBs[i].opticalFlowBB.nBBId;
+            pBBD->B = pTrackerBBs[i].trackerBB.B;
+            pBBD->G = pTrackerBBs[i].trackerBB.G;
+            pBBD->R = pTrackerBBs[i].trackerBB.R;
+            pBBD->nBBId = pTrackerBBs[i].trackerBB.nBBId;
+            pBBD->nMotionLevel = pTrackerBBs[i].trackerBB.nMotionLevel;
+            pBBD->pTracker = pTrackerBBs[i].trackerBB.pTracker;
             pBBD->bBBIDAssigned = 1;
-            LOGV("new BBId=%d\n", pTrackerBBs[i].opticalFlowBB.nBBId);
+            LOGV("new BBId=%d\n", pTrackerBBs[i].trackerBB.nBBId);
 #ifdef SEE_TRACKING_ONLY
             pTrackerBBs[i].pBBT = copyBB(pBBD);
 #endif
@@ -932,9 +1117,11 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
     }
 #else
 
+#if 0
     pBBD = pDetectedBBs;
     while(pBBD)
     {
+        tAnnInfo* pBBTBestIoU = &pTrackerBBs[0].trackerBB;
         for(int i = 0; i < nTrackerInSlots; i++)
         {
             if(!pTrackerBBs[i].bInDetectionList)
@@ -942,14 +1129,20 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
                 /** if not precise, the best approximation of
                  * vehicle flux is what traffic engineers seek
                  * [speaker {AS} @ NVIDIA AI City Challenge] */
-                if(isWithinBB(&pTrackerBBs[i].opticalFlowBB, pBBD))
+                if(isWithinBB(&pTrackerBBs[i].trackerBB, pBBD))
 #if 0
                 pTrackerBBs[i].trackerBB.fIoU = find_iou(&pTrackerBBs[i].trackerBB, pBBD);
+                LOGV("%d:%d: IoU=%f\n", pBBD->nBBId, pTrackerBBs[i].trackerBB.nBBId, pTrackerBBs[i].trackerBB.fIoU);
                 if(pTrackerBBs[i].trackerBB.fIoU > GOOD_IOU_THRESHOLD)
 #endif
                 {
                     LOGV("found in final parse\n");
-                    pBBD->nBBId = pTrackerBBs[i].opticalFlowBB.nBBId;
+                    pBBD->nBBId = pTrackerBBs[i].trackerBB.nBBId;
+                    pBBD->B = pTrackerBBs[i].trackerBB.B;
+                    pBBD->G = pTrackerBBs[i].trackerBB.G;
+                    pBBD->R = pTrackerBBs[i].trackerBB.R;
+                    pBBD->nMotionLevel = pTrackerBBs[i].trackerBB.nMotionLevel;
+                    pBBD->pTracker = pTrackerBBs[i].trackerBB.pTracker;
                     pTrackerBBs[i].bInDetectionList = pBBD->bBBIDAssigned = 1;
                     /** */
                     break;
@@ -958,23 +1151,74 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
         }
         pBBD = pBBD->pNext;
     }
+#endif
+#if 1
+    pBBD = pDetectedBBs;
+    while(pBBD)
+    {
+        tAnnInfo* pBBTBestIoU = NULL;
+        LOGV("finding tracked op for BB-ID(new)=%d \n", pBBD->nBBId);
+        int nBestIoUIdx = -1;
+        for(int i = 0; i < nTrackerInSlots; i++)
+        {
+            if(!pTrackerBBs[i].bInDetectionList)
+            if(isWithinBB_UseCenter(&pTrackerBBs[i].trackerBB, pBBD))
+            {
+                pTrackerBBs[i].trackerBB.fIoU = find_iou(&pTrackerBBs[i].trackerBB, pBBD);
+                /** if not precise, the best approximation of
+                 * vehicle flux is what traffic engineers seek
+                 * [speaker {AS} @ NVIDIA AI City Challenge] */
+                pTrackerBBs[i].trackerBB.fIoU = find_iou(&pTrackerBBs[i].trackerBB, pBBD);
+                if(!pBBTBestIoU || (return_BB_with_best_iou(pBBTBestIoU, &pTrackerBBs[i].trackerBB) != pBBTBestIoU))
+                {
+                    pBBTBestIoU = &pTrackerBBs[i].trackerBB;
+                    nBestIoUIdx = i;
+                }
+                LOGV("%d:%d: IoU=%f\n", pBBD->nBBId, pTrackerBBs[i].trackerBB.nBBId, pTrackerBBs[i].trackerBB.fIoU);
+            }
+        }
+                if(pBBTBestIoU)
+                {
+                    LOGV("BestIoU in th elist = %f nBBId=%d \n", pBBTBestIoU->fIoU, pBBTBestIoU->nBBId);
+                }
+                if(pBBTBestIoU && (return_best_iou(pBBTBestIoU->fIoU, 0.3) != 0.3))
+                {
+                    LOGV("found in final parse\n");
+                    pBBD->nBBId = pBBTBestIoU->nBBId;
+                    pBBD->B = pBBTBestIoU->B;
+                    pBBD->G = pBBTBestIoU->G;
+                    pBBD->R = pBBTBestIoU->R;
+                    pBBD->nMotionLevel = pBBTBestIoU->nMotionLevel;
+                    pBBD->pTracker = pBBTBestIoU->pTracker;
+                    pTrackerBBs[nBestIoUIdx].bInDetectionList = pBBD->bBBIDAssigned = 1;
+                    /** */
+                }
+        pBBD = pBBD->pNext;
+    }
+#endif
 
 #endif
 
-#if 0
+/** keep tracking an object when detection fail on it;
+ * but tracking is successfull
+ * NOTE:
+ * We shouldnt track it if any of the detected bounding boxes
+ * overlap this one
+ */
+#if 1
     for(int i = 0; i < nTrackerInSlots; i++)
     {
         if(pTrackerBBs[i].bInDetectionList == 0)
         {
             LOGV("not detected!!!!\n");
             tAnnInfo* pBBTmp1 = NULL;
-            if(pTrackerBBs[i].opticalFlowBB.pcClassName)
+            if(0)//pTrackerBBs[i].opticalFlowBB.pcClassName)
             {
                 pBBTmp1 = &pTrackerBBs[i].opticalFlowBB;
                 pBBTmp1->x -= pBBTmp1->w/2;
                 pBBTmp1->y -= pBBTmp1->h/2;
             }
-#if 0
+#if 1
             else if(pTrackerBBs[i].trackerBB.pcClassName)
             {
                 pBBTmp1 = &pTrackerBBs[i].trackerBB;
@@ -982,9 +1226,10 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
 #endif
             if(pBBTmp1)
             {
-                if(check_if_new_BB_acceptable(pBBTmp1, pCopyDetectedBBs))
+                if(check_if_new_BB_acceptable(pBBTmp1, pCopyDetectedBBs, pDetectedBBs))
                 {
                 tAnnInfo* pBBTmp;
+
                 
                 pBBTmp = (tAnnInfo*)malloc(sizeof(tAnnInfo));
                 memcpy(pBBTmp, pBBTmp1, sizeof(tAnnInfo));
@@ -1004,6 +1249,36 @@ void assess_iou_trackerBBs_detectedBBs(tTrackerBBInfo* pTrackerBBs,
         }
      }
 #endif
+
+    {
+        for(int i = 0; i < nTrackerInSlots; i++)
+        {
+            if(pTrackerBBs[i].bInDetectionList == 0)
+            {
+                LOGD("BBID not assigned %p\n", pTrackerBBs[i].trackerBB.pTracker);
+                Ptr<Tracker>* pTracker = (Ptr<Tracker>*)pTrackerBBs[i].trackerBB.pTracker;
+                
+                if(pTracker)
+                {
+                    LOGD("deleted ...........\n\n\n\n\n\n\n\n\n\n");
+                    delete pTracker;
+                    pTrackerBBs[i].trackerBB.pTracker = NULL;
+                }
+            }
+        }
+    }
+
+#if 0
+    {
+        for(int i = 0; i < nTrackerInSlots; i++)
+        {
+            pBBT = copyBB(&pTrackerBBs[i].trackerBB);
+            pBBT->pNext = pTrackedBBs;
+            pTrackedBBs = pBBT;
+        }
+    }
+#endif
+
 
 #ifdef SEE_TRACKING_ONLY
     free_BBs(pDetectedBBs);
@@ -1034,11 +1309,19 @@ void display_results(Mat& imgTargM, tAnnInfo* pFinal)
 
     while(pBB)
     {
+#if 0
+        LOGV("nBBId=%d\n", pBB->nBBId);
+        if(pBB->nBBId != 3360)//129, 633-->8.mp4
+        {
+            pBB = pBB->pNext;
+            continue;
+        }
+#endif
         
-        rectangle(imgTargM, Rect2d((double)pBB->x, (double)pBB->y, (double)pBB->w, (double)pBB->h), Scalar( 255, 0, 0 ), 2, 1 );
+        rectangle(imgTargM, Rect2d((double)pBB->x, (double)pBB->y, (double)pBB->w, (double)pBB->h), Scalar( pBB->B, pBB->G, pBB->R ), 2, 1 );
         char disp[50] = {0};
-        LOGV("disp: [%d(%d, %d):%s %d]\n", pBB->nBBId, pBB->x, pBB->y, pBB->pcClassName,pBB->nLaneId);
-        snprintf(disp, 50-1, "[%d(%d, %d):%s %d]", pBB->nBBId, pBB->x, pBB->y, pBB->pcClassName,pBB->nLaneId);
+        LOGV("disp: [%d(%f)(%d, %d):%s %d]\n", pBB->nBBId, pBB->nMotionLevel, pBB->x, pBB->y, pBB->pcClassName,pBB->nLaneId);
+        snprintf(disp, 50-1, "[%d(%f)(%d, %d):%s %d]", pBB->nBBId, pBB->nMotionLevel, pBB->x, pBB->y, pBB->pcClassName,pBB->nLaneId);
         putText(imgTargM, disp, Point(pBB->x,pBB->y), FONT_HERSHEY_PLAIN, 1, Scalar(255,255,255));
         pBB = pBB->pNext;
     }
@@ -1122,27 +1405,95 @@ int getDirection(tAnnInfo* pBBFrom, tAnnInfo* pBBTo)
         return angle(A, B);
 }
 
-int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs)
+int check_if_new_BB_acceptable(tAnnInfo* pBBIn, tAnnInfo* apCopyDetectedBBs, tAnnInfo* pDetectedBBs)
 {
     tAnnInfo* pBBD = apCopyDetectedBBs;
+    tAnnInfo BBD = *pBBIn;
+    tAnnInfo BBD_TL = *pBBIn;
+
+    tAnnInfo BBD_TR = *pBBIn;
+    BBD_TR.x = BBD_TR.x + BBD_TR.w;
+
+    tAnnInfo BBD_BL = *pBBIn;
+    BBD_BL.y = BBD_BL.y + BBD_BL.h;
+
+    tAnnInfo BBD_BR = *pBBIn;
+    BBD_BR.x += BBD_BR.w;
+    BBD_BR.y += BBD_BR.h;
+
+    BBD.x = BBD.x + BBD.w/2;
+    BBD.y = BBD.y + BBD.h/2;
     double disp;
 
+
+    bool bAcceptable = false;
+
+#if 1
     while(pBBD)
     {
-        if(pBBD->nBBId == pBBIn->nBBId)
+        if(pBBD->nBBId == BBD.nBBId)
         {
-            disp = displacement_btw_BBs(pBBD, pBBIn);
-            LOGV("disp is %f %s %d\n", disp, pBBIn->pcClassName, pBBD->nBBId);
-            pBBIn->fDirection = pBBIn->x - pBBD->x > 0 ? 'L'  : 'R';
-            if(disp >= 1.0 
-                //&& pBBIn->fDirection == pBBD->fDirection
+            disp = displacement_btw_BBs(pBBD, &BBD);
+            LOGV("disp is %d %f %s %d %f\n", pBBD->nBBId, disp, BBD.pcClassName, pBBD->nBBId, pBBD->nMotionLevel);
+            BBD.fDirection = BBD.x - pBBD->x > 0 ? 'L'  : 'R';
+            if(1
+                //disp >= 1.0 
+                //&& BBD.fDirection == pBBD->fDirection
                 )
-                return 1;
+            {
+                bAcceptable = true;
+                break;
+            }
         }
         pBBD = pBBD->pNext;
     }
+#endif
 
-    return 0;
+
+#if 1
+    /** check if BBD is overlapped by any detected BBs and if they're unmapped, map them */
+    pBBD = pDetectedBBs;
+    while(pBBD && bAcceptable)
+    {
+        double c = 0;
+        
+#if 0
+        if(isWithinBB(&BBD, pBBD) /** center */)
+            c++;
+        if(isWithinBB(&BBD_TL, pBBD))
+            c++;
+        if(isWithinBB(&BBD_TR, pBBD))
+            c++;
+        if(isWithinBB(&BBD_BL, pBBD))
+            c++;
+        if(isWithinBB(&BBD_BR, pBBD))
+            c++;
+
+        if(c > 1)
+#else
+        c = find_iou(&BBD_TL, pBBD);
+
+        LOGV("c=%f pBBD->bBBIDAssigned=%d\n", c, pBBD->bBBIDAssigned);
+
+        if((c = return_best_iou(c, 0.5)) != 0.5)
+#endif
+        {
+            LOGV("c=%f\n", c);
+            bAcceptable = false;
+            pBBD->bBBIDAssigned = 1;
+            pBBD->nBBId = BBD_TL.nBBId;
+            pBBIn->bBBIDAssigned = 1;
+            break;
+        }
+        pBBD = pBBD->pNext;
+    }
+#endif
+
+    bAcceptable = false;
+
+    LOGV("bAcceptable=%d\n", bAcceptable);
+
+    return bAcceptable;
 }
 
 class Lanes
@@ -1362,17 +1713,31 @@ int isWithinLane(tLane* pLane, tVertex* pVertex)
     return isInside(pLane, *pVertex);
 }
 
-int isWithinBB(tAnnInfo* pBBP, tAnnInfo* pBBD)
+int isWithinBB_UseCenter(tAnnInfo* pBBP, tAnnInfo* pBBD)
 {
-        if((pBBP->x < pBBD->x + pBBD->w + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
-                           && (pBBP->y  < pBBD->y + pBBD->h + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
-                           && (pBBP->x > (pBBD->x > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->x - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0)) 
-                           && (pBBP->y > (pBBD->y > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->y - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0))
+        int x = pBBP->x + ((float)pBBP->w)/2;
+        int y = pBBP->y + ((float)pBBP->h)/2;
+        if((x < pBBD->x + pBBD->w + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
+                           && (y  < pBBD->y + pBBD->h + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
+                           && (x > (pBBD->x > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->x - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0)) 
+                           && (y > (pBBD->y > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->y - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0))
                           )
                 return 1;
         return 0;
 }
 
+int isWithinBB(tAnnInfo* pBBP, tAnnInfo* pBBD)
+{
+        int x = pBBP->x;// + ((float)pBBP->w)/2;
+        int y = pBBP->y;// + ((float)pBBP->h)/2;
+        if((x < pBBD->x + pBBD->w + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
+                           && (y  < pBBD->y + pBBD->h + MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW) 
+                           && (x > (pBBD->x > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->x - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0)) 
+                           && (y > (pBBD->y > MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW ? pBBD->y - MAX_BB_SIDE_LEN_TOLERANCE_OPT_FLOW : 0))
+                          )
+                return 1;
+        return 0;
+}
 
 typedef struct
 {
