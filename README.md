@@ -278,15 +278,14 @@ OpenCV with opencv_contrib [Mandatory]
 BUILD INSTRUCTIONS
 ===============================================================================
 
-Object Tracker: 
+Object Tracker:
 first build the sjtracker: Pre-requisite: OpenCV and OpenCV_contrib. Follow: http://docs.opencv.org/master/d7/d9f/tutorial_linux_install.html to install both of them. [We don't need python for now]. 
+$cd objtracker/
+$./build.sh
 
-$cd objtracker/ 
-$./build.sh 
+Darknet (Supporting tracker!!):
 
-Darknet (Supporting tracker!!): 
-
-$cd darknet_track/ 
+$cd darknet_track/
 $make
 
 OR (build both together using a single script):
